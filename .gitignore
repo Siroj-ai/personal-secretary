@@ -1,0 +1,35 @@
+# Gradle & Build outputs
+.gradle/
+.kotlin/
+build/
+app/build/
+captures/
+.cxx/
+
+# Local machine & signing secrets (NEVER commit)
+local.properties
+signing.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+google-services.json
+
+# Personal data, exports, models, and media (NEVER commit)
+DayBook_Bootstrap.json
+*.csv
+*.tsv
+*.apk
+*.aab
+*.idsig
+*.litertlm
+*.task
+*.bin
+*.mp4
+*.mov
+
+# IDE & OS files
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
