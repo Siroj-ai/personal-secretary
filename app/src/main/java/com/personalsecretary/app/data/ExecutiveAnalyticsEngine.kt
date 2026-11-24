@@ -1,6 +1,8 @@
 package com.personalsecretary.app.data
 
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.abs
@@ -9,6 +11,8 @@ import kotlin.math.roundToInt
 object ExecutiveAnalyticsEngine {
 
     private val isoFmt = DateTimeFormatter.ISO_LOCAL_DATE
+    private val timeFmt = DateTimeFormatter.ofPattern("h:mm a", Locale.US)
+    private val shortDateTimeFmt = DateTimeFormatter.ofPattern("MMM d, h:mm a", Locale.US)
 
     fun computeSnapshot(
         transactions: List<TransactionRecord>,
@@ -16,14 +20,16 @@ object ExecutiveAnalyticsEngine {
         earnings: List<EarningEntry>,
         hygiene: FinancialHygieneReport,
         steps: List<DailyStepRecord>,
-        checkIns: List<MentalCheckIn>,
+        hourlyStepsByDate: Map<String, List<Long>>,
         profile: SecretaryProfile,
-        today: LocalDate = LocalDate.now()
+        today: LocalDate = LocalDate.now(),
+        healthVitals: HealthVitalsSummary = HealthVitalsSummary(),
+        calendarEvents: List<CalendarEventItem> = emptyList(),
+        tasks: List<SecretaryTask> = emptyList(),
+        nowMillis: Long = System.currentTimeMillis()
     ): ExecutiveSnapshot {
         val todayIso = today.format(isoFmt)
-        val thirtyDaysAgoIso = today.minusDays(30).format(isoFmt)
-        val fourteenDaysAgoIso = today.minusDays(14).format(isoFmt)
-        val sevenDaysAgoIso = today.minusDays(6).format(isoFmt)
+        val yesterdayIso = today.minusDays(1).format(isoFmt)
         val currentMonthKey = todayIso.substring(0, 7)
 
         val debitTxns = transactions.filter { it.accountType == AccountType.DEBIT }
@@ -36,7 +42,6 @@ object ExecutiveAnalyticsEngine {
 
         val netWorth = DayBookParserAndHygiene.round2(debitBalance + creditBalance + ssf.netEquity)
 
-        // Anchor 30d window to the latest transaction date if today is far ahead of imported data
         val latestTxDate = debitTxns.lastOrNull()?.dateIso?.takeIf { it.length == 10 && it != "0000-00-00" }
         val anchorDate = runCatching { LocalDate.parse(latestTxDate ?: todayIso, isoFmt) }.getOrDefault(today)
         val activeMonthKey = anchorDate.format(isoFmt).substring(0, 7)
@@ -96,9 +101,15 @@ object ExecutiveAnalyticsEngine {
         val stepsByDate = steps.associateBy { it.dateIso }
         val recent7d = (6 downTo 0).map { offset ->
             val d = today.minusDays(offset.toLong()).format(isoFmt)
-            stepsByDate[d] ?: DailyStepRecord(d, 0L, StepSource.HARDWARE_SENSOR, 0L)
+            stepsByDate[d] ?: DailyStepRecord(d, 0L, StepSource.HEALTH_CONNECT, 0L)
         }
         val todayStepRec = stepsByDate[todayIso] ?: recent7d.last()
+        val yesterdaySteps = stepsByDate[yesterdayIso]?.steps ?: 0L
+        val vsYesterdayPct = if (yesterdaySteps > 0L) {
+            (((todayStepRec.steps - yesterdaySteps).toDouble() / yesterdaySteps.toDouble()) * 100.0).roundToInt()
+        } else null
+
+        val weeklyTotal = recent7d.sumOf { it.steps }
         val nonZeroDays = recent7d.filter { it.steps > 0L }
         val avgSteps7d = if (nonZeroDays.isNotEmpty()) nonZeroDays.map { it.steps }.average().toLong() else 0L
 
@@ -113,13 +124,41 @@ object ExecutiveAnalyticsEngine {
             }
         }
 
-        // Mental check-ins summary
-        val recent7CheckIns = checkIns.filter { it.dateIso >= sevenDaysAgoIso }
-        val recent14CheckIns = checkIns.filter { it.dateIso >= fourteenDaysAgoIso }
-        val avgMood = if (recent7CheckIns.isNotEmpty()) recent7CheckIns.map { it.mood }.average().toFloat() else 0f
-        val avgEnergy = if (recent7CheckIns.isNotEmpty()) recent7CheckIns.map { it.energy }.average().toFloat() else 0f
-        val avgStress = if (recent7CheckIns.isNotEmpty()) recent7CheckIns.map { it.stress }.average().toFloat() else 0f
-        val avgSleep = if (recent7CheckIns.isNotEmpty()) recent7CheckIns.map { it.sleepHours.toDouble() }.average().toFloat() else 0f
+        val todayHourly = hourlyStepsByDate[todayIso].orEmpty()
+        val peakHour = todayHourly
+            .withIndex()
+            .maxByOrNull { it.value }
+            ?.takeIf { it.value > 0L }
+            ?.index
+
+        val todayMetrics = StepDerivedMetrics.fromSteps(todayStepRec.steps)
+
+        // Schedule & Work Tasks summary
+        val zone = ZoneId.systemDefault()
+        val todayStartMillis = today.atStartOfDay(zone).toInstant().toEpochMilli()
+        val tomorrowStartMillis = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+
+        val todayEvents = calendarEvents.filter { ev ->
+            ev.startMillis < tomorrowStartMillis && ev.endMillis > todayStartMillis
+        }.sortedBy { it.startMillis }
+
+        val upcomingEvents7d = calendarEvents.filter { ev ->
+            ev.endMillis >= nowMillis
+        }.sortedBy { it.startMillis }
+
+        val pendingTasks = tasks.filter { !it.isCompleted }.sortedWith(
+            compareBy<SecretaryTask> { it.dueAtMillis == null }
+                .thenBy { it.dueAtMillis ?: Long.MAX_VALUE }
+                .thenBy { it.priority.ordinal }
+        )
+        val overdueTasksCount = pendingTasks.count { t ->
+            val due = t.dueAtMillis
+            due != null && due < nowMillis
+        }
+        val dueTodayTasksCount = pendingTasks.count { t ->
+            val due = t.dueAtMillis
+            due != null && due >= todayStartMillis && due < tomorrowStartMillis
+        }
 
         val insights = buildInsights(
             debitBalance = debitBalance,
@@ -131,9 +170,12 @@ object ExecutiveAnalyticsEngine {
             hygiene = hygiene,
             todaySteps = todayStepRec.steps,
             avgSteps7d = avgSteps7d,
-            recentCheckIns = recent14CheckIns,
-            debitTxns = debitTxns,
-            stepsByDate = stepsByDate,
+            todayMetrics = todayMetrics,
+            healthVitals = healthVitals,
+            todayEvents = todayEvents,
+            pendingTasks = pendingTasks,
+            overdueTasksCount = overdueTasksCount,
+            dueTodayTasksCount = dueTodayTasksCount,
             profile = profile
         )
 
@@ -157,15 +199,20 @@ object ExecutiveAnalyticsEngine {
             hygieneReport = hygiene,
             todaySteps = todayStepRec.steps,
             todayStepSource = todayStepRec.source,
+            todayMetrics = todayMetrics,
+            stepsVsYesterdayPercent = vsYesterdayPct,
             avgSteps7d = avgSteps7d,
+            weeklyStepsTotal = weeklyTotal,
             stepStreakDays = streak,
             recentSteps7d = recent7d,
-            latestCheckIn = checkIns.firstOrNull(),
-            avgMood7d = avgMood,
-            avgEnergy7d = avgEnergy,
-            avgStress7d = avgStress,
-            avgSleep7d = avgSleep,
-            checkInCount14d = recent14CheckIns.size,
+            hourlyStepsByDate = hourlyStepsByDate,
+            peakHourToday = peakHour,
+            healthVitals = healthVitals,
+            todayEvents = todayEvents,
+            upcomingEvents7d = upcomingEvents7d,
+            pendingTasks = pendingTasks,
+            overdueTasksCount = overdueTasksCount,
+            dueTodayTasksCount = dueTodayTasksCount,
             insights = insights
         )
     }
@@ -180,13 +227,61 @@ object ExecutiveAnalyticsEngine {
         hygiene: FinancialHygieneReport,
         todaySteps: Long,
         avgSteps7d: Long,
-        recentCheckIns: List<MentalCheckIn>,
-        debitTxns: List<TransactionRecord>,
-        stepsByDate: Map<String, DailyStepRecord>,
+        todayMetrics: StepDerivedMetrics,
+        healthVitals: HealthVitalsSummary,
+        todayEvents: List<CalendarEventItem>,
+        pendingTasks: List<SecretaryTask>,
+        overdueTasksCount: Int,
+        dueTodayTasksCount: Int,
         profile: SecretaryProfile
     ): List<ExecutiveInsight> {
         val cur = profile.currencySymbol
         val list = mutableListOf<ExecutiveInsight>()
+
+        if (overdueTasksCount > 0) {
+            val first = pendingTasks.firstOrNull { it.dueAtMillis != null }
+            list += ExecutiveInsight(
+                id = "tasks_overdue",
+                domain = InsightDomain.SCHEDULE,
+                severity = InsightSeverity.CAUTION,
+                title = "$overdueTasksCount Overdue Work / Schedule Item${if (overdueTasksCount > 1) "s" else ""}",
+                detail = if (first != null) "Top overdue item: '${first.title}' (${first.category.label} · ${first.priority.label})." else "You have overdue tasks awaiting attention.",
+                recommendation = "Clear or reschedule overdue items in the Schedule tab before starting new tasks."
+            )
+        } else if (todayEvents.isNotEmpty() || dueTodayTasksCount > 0) {
+            list += ExecutiveInsight(
+                id = "schedule_today",
+                domain = InsightDomain.SCHEDULE,
+                severity = InsightSeverity.INFO,
+                title = "Today's Desk: ${todayEvents.size} Event${if (todayEvents.size == 1) "" else "s"} · $dueTodayTasksCount Due Task${if (dueTodayTasksCount == 1) "" else "s"}",
+                detail = todayEvents.firstOrNull()?.let { "Next on calendar: ${it.title} (${formatEventTimeRange(it)})." }
+                    ?: "Open the Schedule tab to review today's priorities and reminders.",
+                recommendation = "Time-block your top priority work item between calendar commitments."
+            )
+        }
+
+        if (healthVitals.lastNightSleepMinutes in 1..359) {
+            list += ExecutiveInsight(
+                id = "sleep_short",
+                domain = InsightDomain.PHYSICAL,
+                severity = InsightSeverity.CAUTION,
+                title = "Short Sleep Logged (${formatDurationHoursMins(healthVitals.lastNightSleepMinutes)})",
+                detail = "Last night's tracked sleep was under 6 hours (7-day avg: ${formatDurationHoursMins(healthVitals.avgSleepMinutes7d)}).",
+                recommendation = "Keep today's schedule focused on essential work and aim for an earlier wind-down tonight."
+            )
+        } else if (healthVitals.lastNightSleepMinutes >= 420) {
+            list += ExecutiveInsight(
+                id = "sleep_strong",
+                domain = InsightDomain.PHYSICAL,
+                severity = InsightSeverity.POSITIVE,
+                title = "Solid Recovery Sleep (${formatDurationHoursMins(healthVitals.lastNightSleepMinutes)})",
+                detail = buildString {
+                    append("Well-rested at ${formatDurationHoursMins(healthVitals.lastNightSleepMinutes)}.")
+                    healthVitals.restingHeartRateBpm?.let { append(" Resting HR: $it bpm.") }
+                },
+                recommendation = "Great recovery baseline for deep work and hitting your daily step goal."
+            )
+        }
 
         if (hygiene.duplicatesRemoved > 0) {
             list += ExecutiveInsight(
@@ -241,7 +336,7 @@ object ExecutiveAnalyticsEngine {
                 severity = InsightSeverity.CAUTION,
                 title = "Tobacco & Alcohol Spend: ${formatMoney(cur, tobaccoAlcohol30d)} (30d)",
                 detail = "Habit spending represents ${String.format(Locale.US, "%.1f", (tobaccoAlcohol30d / last30Expense) * 100.0)}% of your 30-day debit outflow.",
-                recommendation = "Cutting this by 30% would preserve ~${formatMoney(cur, tobaccoAlcohol30d * 0.3)}/month and support lung & stress recovery."
+                recommendation = "Cutting this by 30% preserves ~${formatMoney(cur, tobaccoAlcohol30d * 0.3)}/month and directly supports stamina and walking recovery."
             )
         }
 
@@ -256,7 +351,6 @@ object ExecutiveAnalyticsEngine {
             )
         }
 
-        // Physical insight
         val stepPct = if (profile.dailyStepGoal > 0) (todaySteps * 100 / profile.dailyStepGoal).toInt() else 0
         if (todaySteps == 0L && avgSteps7d == 0L) {
             list += ExecutiveInsight(
@@ -264,8 +358,8 @@ object ExecutiveAnalyticsEngine {
                 domain = InsightDomain.PHYSICAL,
                 severity = InsightSeverity.INFO,
                 title = "Connect OnePlus 13 Steps",
-                detail = "Grant Health Connect or Activity Recognition permission so your secretary can monitor daily movement automatically.",
-                recommendation = "Open Health & Desk -> Physical to authorize Health Connect and enable ColorOS 17 background activity."
+                detail = "Grant Health Connect or Physical Activity permission so your secretary can monitor daily movement automatically.",
+                recommendation = "Open Steps & Desk -> Steps to authorize Health Connect and enable ColorOS 17 background activity."
             )
         } else if (stepPct >= 100) {
             list += ExecutiveInsight(
@@ -273,8 +367,8 @@ object ExecutiveAnalyticsEngine {
                 domain = InsightDomain.PHYSICAL,
                 severity = InsightSeverity.POSITIVE,
                 title = "Daily Step Goal Achieved ($todaySteps steps)",
-                detail = "You have met your ${profile.dailyStepGoal}-step target today (7-day avg: $avgSteps7d steps).",
-                recommendation = "Stay hydrated and protect your sleep window tonight."
+                detail = "Covered ${String.format(Locale.US, "%.2f", todayMetrics.distanceKm)} km (~${todayMetrics.caloriesKcal} kcal, ${todayMetrics.activeMinutes} active mins). 7-day avg: $avgSteps7d steps.",
+                recommendation = "Great physical discipline today — stay hydrated and keep the streak alive tomorrow."
             )
         } else {
             val remaining = (profile.dailyStepGoal - todaySteps).coerceAtLeast(0L)
@@ -283,56 +377,8 @@ object ExecutiveAnalyticsEngine {
                 domain = InsightDomain.PHYSICAL,
                 severity = InsightSeverity.INFO,
                 title = "$remaining Steps Remaining Today",
-                detail = "Currently at $todaySteps / ${profile.dailyStepGoal} steps ($stepPct%). A brisk 20-minute walk adds roughly 2,000 steps.",
-                recommendation = "Schedule a short walk after your next work block to clear cortisol and hit target."
-            )
-        }
-
-        // Cross-domain Stress vs Spending correlation
-        if (recentCheckIns.size >= 2 && debitTxns.isNotEmpty()) {
-            val dailySpend = debitTxns.groupBy { it.dateIso }.mapValues { (_, txs) -> txs.sumOf { it.debit } }
-            val highStressDates = recentCheckIns.filter { it.stress >= 4 }.map { it.dateIso }.distinct()
-            val calmDates = recentCheckIns.filter { it.stress <= 2 }.map { it.dateIso }.distinct()
-            if (highStressDates.isNotEmpty() && calmDates.isNotEmpty()) {
-                val highAvg = highStressDates.mapNotNull { dailySpend[it] }.average().takeIf { !it.isNaN() }
-                val calmAvg = calmDates.mapNotNull { dailySpend[it] }.average().takeIf { !it.isNaN() }
-                if (highAvg != null && calmAvg != null && highAvg > calmAvg * 1.2) {
-                    list += ExecutiveInsight(
-                        id = "stress_spend_corr",
-                        domain = InsightDomain.CROSS_DOMAIN,
-                        severity = InsightSeverity.CAUTION,
-                        title = "Stress-Linked Spending Pattern",
-                        detail = "On high-stress days your average debit spend is ${formatMoney(cur, highAvg)} vs. ${formatMoney(cur, calmAvg)} on calm days.",
-                        recommendation = "When stress hits 4+, pause non-essential purchases for 2 hours and take a 10-minute walk instead."
-                    )
-                }
-            }
-
-            // Steps vs Mood correlation
-            val activeMoods = recentCheckIns.filter { (stepsByDate[it.dateIso]?.steps ?: 0L) >= profile.dailyStepGoal * 0.7 }.map { it.mood }
-            val lowStepMoods = recentCheckIns.filter { (stepsByDate[it.dateIso]?.steps ?: 0L) in 1L..(profile.dailyStepGoal * 0.4).toLong() }.map { it.mood }
-            if (activeMoods.isNotEmpty() && lowStepMoods.isNotEmpty() && activeMoods.average() > lowStepMoods.average() + 0.4) {
-                list += ExecutiveInsight(
-                    id = "steps_mood_corr",
-                    domain = InsightDomain.CROSS_DOMAIN,
-                    severity = InsightSeverity.POSITIVE,
-                    title = "Movement Lifts Your Mood",
-                    detail = "Your average mood is ${String.format(Locale.US, "%.1f", activeMoods.average())}/5 on active days vs. ${String.format(Locale.US, "%.1f", lowStepMoods.average())}/5 on low-step days.",
-                    recommendation = "Treat a midday walk as a cognitive reset, not just exercise."
-                )
-            }
-        }
-
-        // High stress alert
-        val latest = recentCheckIns.firstOrNull()
-        if (latest != null && latest.stress >= 4) {
-            list += ExecutiveInsight(
-                id = "mental_stress_high",
-                domain = InsightDomain.MENTAL,
-                severity = InsightSeverity.CAUTION,
-                title = "Elevated Stress Logged (${latest.stress}/5)",
-                detail = "Recent check-in shows mood ${latest.mood}/5, energy ${latest.energy}/5, sleep ${latest.sleepHours}h.",
-                recommendation = "Trim non-urgent tasks today and aim for ${profile.sleepGoalHours}h sleep tonight."
+                detail = "Currently at $todaySteps / ${profile.dailyStepGoal} steps (${String.format(Locale.US, "%.2f", todayMetrics.distanceKm)} km, ${todayMetrics.caloriesKcal} kcal). A brisk 20-minute walk adds ~2,000 steps.",
+                recommendation = "Schedule a short walk after your next work block to stay on pace for ${profile.dailyStepGoal} steps."
             )
         }
 
@@ -342,15 +388,15 @@ object ExecutiveAnalyticsEngine {
     fun buildGemmaDossier(
         snapshot: ExecutiveSnapshot,
         profile: SecretaryProfile,
-        recentTransactions: List<TransactionRecord>,
-        recentCheckIns: List<MentalCheckIn>
+        recentTransactions: List<TransactionRecord>
     ): String {
         val c = profile.currencySymbol
         val sb = StringBuilder()
         sb.appendLine("=== EXECUTIVE CLIENT DOSSIER (LIVE VERIFIED METRICS) ===")
         sb.appendLine("Client: ${profile.userName} | Currency: $c | Active Month: ${snapshot.currentMonthKey}")
-        sb.appendLine("Financial Goals: ${profile.financialGoals}")
-        sb.appendLine("Health Goals: ${profile.healthGoals}")
+        sb.appendLine("Authoritative Targets: Monthly Spend Budget = ${formatMoney(c, profile.monthlySpendBudget)} | Daily Step Goal = ${profile.dailyStepGoal} steps")
+        sb.appendLine("Financial Priorities: ${profile.financialGoals}")
+        sb.appendLine("Physical Activity Priorities: ${profile.healthGoals}")
         if (profile.customDossierNotes.isNotBlank()) {
             sb.appendLine("Client Notes: ${profile.customDossierNotes}")
         }
@@ -386,25 +432,43 @@ object ExecutiveAnalyticsEngine {
             }
         }
         sb.appendLine()
-        sb.appendLine("[2. PHYSICAL HEALTH - ONEPLUS 13 STEPS]")
-        sb.appendLine("- Today Steps: ${snapshot.todaySteps} / ${profile.dailyStepGoal} (source: ${snapshot.todayStepSource.name})")
-        sb.appendLine("- 7-Day Average: ${snapshot.avgSteps7d} steps/day | Goal Streak: ${snapshot.stepStreakDays} days")
+        sb.appendLine("[2. PHYSICAL HEALTH & WATCH VITALS (ONEPLUS 13 / HEALTH CONNECT)]")
+        sb.appendLine("- Today Steps: ${snapshot.todaySteps} / ${profile.dailyStepGoal} steps | ${String.format(Locale.US, "%.2f", snapshot.todayMetrics.distanceKm)} km | ${snapshot.todayMetrics.caloriesKcal} kcal | ${snapshot.todayMetrics.activeMinutes} active mins")
+        sb.appendLine("- 7-Day Total: ${snapshot.weeklyStepsTotal} | 7-Day Average: ${snapshot.avgSteps7d} steps/day | Goal Streak: ${snapshot.stepStreakDays} days")
+        snapshot.peakHourToday?.let { hr ->
+            sb.appendLine("- Peak Activity Hour Today: ${formatHourLabel(hr)}")
+        }
         val stepSeries = snapshot.recentSteps7d.joinToString(", ") { "${it.dateIso.takeLast(5)}:${it.steps}" }
         sb.appendLine("- Last 7 Days: $stepSeries")
+        val vitals = snapshot.healthVitals
+        if (vitals.hasAnyWatchData) {
+            val parts = buildList {
+                if (vitals.lastNightSleepMinutes > 0) add("Sleep last night ${formatDurationHoursMins(vitals.lastNightSleepMinutes)} (7d avg ${formatDurationHoursMins(vitals.avgSleepMinutes7d)})")
+                vitals.restingHeartRateBpm?.let { add("Resting HR $it bpm") }
+                vitals.latestHeartRateBpm?.let { add("Latest HR $it bpm") }
+                vitals.latestSpo2Percent?.let { add("SpO2 ${String.format(Locale.US, "%.1f", it)}%") }
+                if (vitals.workoutsThisWeek > 0) add("Workouts 7d: ${vitals.workoutsThisWeek} (${vitals.workoutMinutesThisWeek} min)")
+            }
+            sb.appendLine("- Watch Vitals: ${parts.joinToString(" | ")}")
+        }
+
         sb.appendLine()
-        sb.appendLine("[3. MENTAL HEALTH & ENERGY]")
-        val latest = snapshot.latestCheckIn
-        if (latest != null) {
-            sb.appendLine("- Latest Check-in (${latest.dateIso}): Mood ${latest.mood}/5, Energy ${latest.energy}/5, Stress ${latest.stress}/5, Sleep ${latest.sleepHours}h, Tags: ${latest.tags.joinToString(",")}, Note: ${latest.note.take(140)}")
-            sb.appendLine("- 7-Day Averages: Mood ${fmt1(snapshot.avgMood7d)}/5, Energy ${fmt1(snapshot.avgEnergy7d)}/5, Stress ${fmt1(snapshot.avgStress7d)}/5, Sleep ${fmt1(snapshot.avgSleep7d)}h")
-        } else {
-            sb.appendLine("- No mental check-ins logged yet.")
+        sb.appendLine("[3. SCHEDULE, MEETINGS & WORK TASKS]")
+        sb.appendLine("- Today's Calendar Events: ${snapshot.todayEvents.size} | Upcoming 7d Events: ${snapshot.upcomingEvents7d.size}")
+        snapshot.todayEvents.take(6).forEach { ev ->
+            val loc = if (ev.location.isNotBlank()) " @ ${ev.location}" else ""
+            sb.appendLine("  * Today ${formatEventTimeRange(ev)} | ${ev.title}$loc")
         }
-        if (recentCheckIns.size > 1) {
-            sb.appendLine("- Recent Check-ins: " + recentCheckIns.take(4).joinToString(" | ") {
-                "${it.dateIso}(M${it.mood}/E${it.energy}/S${it.stress}/${it.sleepHours}h)"
-            })
+        val futureEvents = snapshot.upcomingEvents7d.filter { ev -> snapshot.todayEvents.none { it.id == ev.id && it.startMillis == ev.startMillis } }
+        futureEvents.take(4).forEach { ev ->
+            sb.appendLine("  * Upcoming ${formatMillisDateTime(ev.startMillis)} | ${ev.title}")
         }
+        sb.appendLine("- Pending Work & Personal Tasks: ${snapshot.pendingTasks.size} (Overdue: ${snapshot.overdueTasksCount}, Due Today: ${snapshot.dueTodayTasksCount})")
+        snapshot.pendingTasks.take(8).forEach { task ->
+            val dueLbl = task.dueAtMillis?.let { formatMillisDateTime(it) } ?: "No deadline"
+            sb.appendLine("  * [${task.priority.label}/${task.category.label}] ${task.title} (Due: $dueLbl)")
+        }
+
         if (snapshot.insights.isNotEmpty()) {
             sb.appendLine()
             sb.appendLine("[4. DETECTED EXECUTIVE ALERTS]")
@@ -418,7 +482,22 @@ object ExecutiveAnalyticsEngine {
         val sb = StringBuilder()
         sb.appendLine("Executive Briefing for ${profile.userName}")
         sb.appendLine()
-        sb.appendLine("1. Financial Position")
+        sb.appendLine("1. Schedule & Work Priorities")
+        if (snapshot.todayEvents.isEmpty() && snapshot.pendingTasks.isEmpty()) {
+            sb.appendLine("• Calendar and task desk are currently clear. Connect your phone calendar or add work reminders in the Schedule tab.")
+        } else {
+            sb.appendLine("• Today's Calendar: ${snapshot.todayEvents.size} meeting${if (snapshot.todayEvents.size == 1) "" else "s"} (${snapshot.upcomingEvents7d.size} over the next 7 days).")
+            snapshot.todayEvents.take(3).forEach { ev ->
+                sb.appendLine("  – ${formatEventTimeRange(ev)}: ${ev.title}")
+            }
+            sb.appendLine("• Work Tasks: ${snapshot.pendingTasks.size} open (${snapshot.overdueTasksCount} overdue · ${snapshot.dueTodayTasksCount} due today).")
+            snapshot.pendingTasks.take(3).forEach { t ->
+                val due = t.dueAtMillis?.let { " · ${formatMillisDateTime(it)}" }.orEmpty()
+                sb.appendLine("  – [${t.priority.label}] ${t.title}$due")
+            }
+        }
+        sb.appendLine()
+        sb.appendLine("2. Financial Position")
         if (snapshot.hygieneReport.uniqueDebitRows > 0) {
             sb.appendLine("• Liquid balance stands at ${formatMoney(c, snapshot.debitBalance)}, with Credit Card at ${formatMoney(c, snapshot.creditCardBalance)} and SSF net equity at ${formatMoney(c, snapshot.ssfSummary.netEquity)}.")
             sb.appendLine("• Active month (${snapshot.currentMonthKey}): ${formatMoney(c, snapshot.currentMonthExpense)} spent vs. ${formatMoney(c, snapshot.currentMonthIncome)} received (${snapshot.budgetUsedPercent}% of your ${formatMoney(c, profile.monthlySpendBudget)} budget; 30d burn ${formatMoney(c, snapshot.dailyBurnRate30d)}/day).")
@@ -426,19 +505,23 @@ object ExecutiveAnalyticsEngine {
                 sb.appendLine("• Top 30-day category: ${top.category} at ${formatMoney(c, top.amount)} (${top.sharePercent}%).")
             }
         } else {
-            sb.appendLine("• Day Book is not synced yet. Connect your Apps Script URL or import a CSV in Setup to activate live financial auditing.")
+            sb.appendLine("• Day Book is not synced yet. Connect your Apps Script URL or import DayBook_Bootstrap.json in Setup to activate live financial auditing.")
         }
         sb.appendLine()
-        sb.appendLine("2. Physical Activity (OnePlus 13)")
+        sb.appendLine("3. Physical Health & Watch Vitals")
         val rem = (profile.dailyStepGoal - snapshot.todaySteps).coerceAtLeast(0L)
-        sb.appendLine("• Today: ${snapshot.todaySteps} / ${profile.dailyStepGoal} steps (7d avg: ${snapshot.avgSteps7d}, streak: ${snapshot.stepStreakDays}d). ${if (rem == 0L) "Target achieved." else "$rem steps remaining."}")
-        sb.appendLine()
-        sb.appendLine("3. Mental Bandwidth")
-        val latest = snapshot.latestCheckIn
-        if (latest != null) {
-            sb.appendLine("• Latest check-in (${latest.dateIso}): Mood ${latest.mood}/5, Energy ${latest.energy}/5, Stress ${latest.stress}/5, Sleep ${latest.sleepHours}h.")
-        } else {
-            sb.appendLine("• No mental check-in recorded yet today. Log a 15-second check-in so I can correlate stress and energy with spending and steps.")
+        val m = snapshot.todayMetrics
+        sb.appendLine("• Today: ${snapshot.todaySteps} / ${profile.dailyStepGoal} steps (${String.format(Locale.US, "%.2f", m.distanceKm)} km · ${m.caloriesKcal} kcal · ${m.activeMinutes} min). ${if (rem == 0L) "Target achieved." else "$rem steps remaining."}")
+        sb.appendLine("• 7-day average: ${snapshot.avgSteps7d} steps/day · Weekly total: ${snapshot.weeklyStepsTotal} · Streak: ${snapshot.stepStreakDays}d.")
+        if (snapshot.healthVitals.hasAnyWatchData) {
+            val v = snapshot.healthVitals
+            val extras = buildList {
+                if (v.lastNightSleepMinutes > 0) add("Sleep ${formatDurationHoursMins(v.lastNightSleepMinutes)}")
+                v.restingHeartRateBpm?.let { add("Resting HR $it bpm") }
+                v.latestSpo2Percent?.let { add("SpO2 ${String.format(Locale.US, "%.1f", it)}%") }
+                if (v.workoutsThisWeek > 0) add("${v.workoutsThisWeek} workouts (${v.workoutMinutesThisWeek}m)")
+            }
+            sb.appendLine("• Watch Vitals: ${extras.joinToString(" · ")}")
         }
         sb.appendLine()
         sb.appendLine("4. Priority Actions")
@@ -484,39 +567,83 @@ object ExecutiveAnalyticsEngine {
                 • Combined Net Estimate: ${formatMoney(c, snapshot.netWorthEstimate)}
                 """.trimIndent()
             }
-            q.contains("step") || q.contains("walk") || q.contains("physical") || q.contains("exercise") -> {
-                val rem = (profile.dailyStepGoal - snapshot.todaySteps).coerceAtLeast(0L)
-                val series = snapshot.recentSteps7d.joinToString(" | ") { "${it.dateIso.takeLast(5)}: ${it.steps}" }
-                """
-                OnePlus 13 Activity Audit:
-                • Today: ${snapshot.todaySteps} / ${profile.dailyStepGoal} steps (${if (rem == 0L) "Goal achieved" else "$rem remaining"})
-                • 7-Day Average: ${snapshot.avgSteps7d} steps/day | Active Streak: ${snapshot.stepStreakDays} days
-                • Last 7 Days: $series
-
-                Recommendation: ${if (rem > 0) "Split the remaining $rem steps into a 15–20 minute brisk walk (~2,000 steps) to boost energy and focus." else "Great consistency today — prioritize recovery and ${profile.sleepGoalHours}h sleep tonight."}
-                """.trimIndent()
-            }
-            q.contains("stress") || q.contains("mental") || q.contains("mood") || q.contains("anxious") || q.contains("overwhelm") || q.contains("tired") -> {
-                val latest = snapshot.latestCheckIn
-                val status = if (latest != null) {
-                    "Latest check-in (${latest.dateIso}): Mood ${latest.mood}/5, Energy ${latest.energy}/5, Stress ${latest.stress}/5, Sleep ${latest.sleepHours}h."
+            q.contains("schedule") || q.contains("calendar") || q.contains("meeting") || q.contains("task") || q.contains("work") || q.contains("remind") -> {
+                val evLines = if (snapshot.todayEvents.isEmpty()) {
+                    "• No calendar meetings scheduled for today."
                 } else {
-                    "You haven't logged a check-in today yet."
+                    snapshot.todayEvents.take(6).joinToString("\n") { ev ->
+                        val loc = if (ev.location.isNotBlank()) " (${ev.location})" else ""
+                        "• ${formatEventTimeRange(ev)} — ${ev.title}$loc"
+                    }
+                }
+                val taskLines = if (snapshot.pendingTasks.isEmpty()) {
+                    "• No pending tasks on your desk."
+                } else {
+                    snapshot.pendingTasks.take(6).joinToString("\n") { t ->
+                        val due = t.dueAtMillis?.let { formatMillisDateTime(it) } ?: "No due time"
+                        "• [${t.priority.label}/${t.category.label}] ${t.title} — $due"
+                    }
                 }
                 """
-                Let's slow down and reset methodically.
-                $status
+                Schedule & Work Desk (${snapshot.todayEvents.size} events today · ${snapshot.pendingTasks.size} open tasks, ${snapshot.overdueTasksCount} overdue):
 
-                Immediate 10-minute executive reset:
-                1. Step away from screens and take 6 slow breaths (4s inhale, 6s exhale).
-                2. Walk for 10 minutes (~1,000 steps) — your liquid balance is ${formatMoney(c, snapshot.debitBalance)}, so no urgent decision needs to be forced right now.
-                3. Pick only the single highest-impact task for the next hour and defer the rest.
+                Today's Calendar:
+                $evLines
 
-                (Load gemma-4-E4B-it.litertlm in Setup for deeper, conversational on-device coaching.)
+                Priority Work & Personal Tasks:
+                $taskLines
+                """.trimIndent()
+            }
+            q.contains("step") || q.contains("walk") || q.contains("physical") || q.contains("exercise") || q.contains("calor") || q.contains("sleep") || q.contains("heart") || q.contains("watch") -> {
+                val rem = (profile.dailyStepGoal - snapshot.todaySteps).coerceAtLeast(0L)
+                val m = snapshot.todayMetrics
+                val series = snapshot.recentSteps7d.joinToString(" | ") { "${it.dateIso.takeLast(5)}: ${it.steps}" }
+                val vitalsLine = if (snapshot.healthVitals.hasAnyWatchData) {
+                    val v = snapshot.healthVitals
+                    val parts = buildList {
+                        if (v.lastNightSleepMinutes > 0) add("Sleep ${formatDurationHoursMins(v.lastNightSleepMinutes)}")
+                        v.restingHeartRateBpm?.let { add("Resting HR $it bpm") }
+                        v.latestHeartRateBpm?.let { add("Latest HR $it bpm") }
+                        v.latestSpo2Percent?.let { add("SpO2 ${String.format(Locale.US, "%.1f", it)}%") }
+                        if (v.workoutsThisWeek > 0) add("${v.workoutsThisWeek} workouts (${v.workoutMinutesThisWeek} min)")
+                    }
+                    "\n• Watch Vitals: ${parts.joinToString(" · ")}"
+                } else {
+                    "\n• Watch Vitals: Ready for Health Connect watch sync (OnePlus Watch, Fitbit, Amazfit, Xiaomi, Garmin)."
+                }
+                """
+                Physical & Watch Health Audit:
+                • Today: ${snapshot.todaySteps} / ${profile.dailyStepGoal} steps (${String.format(Locale.US, "%.2f", m.distanceKm)} km · ${m.caloriesKcal} kcal · ${m.activeMinutes} active min)
+                • 7-Day Average: ${snapshot.avgSteps7d} steps/day | Weekly Total: ${snapshot.weeklyStepsTotal} | Streak: ${snapshot.stepStreakDays}d
+                • Last 7 Days: $series$vitalsLine
+
+                Recommendation: ${if (rem > 0) "Split the remaining $rem steps into a 20-minute brisk walk (~2,000 steps) to boost daily burn and hit your target." else "Goal reached today — solid consistency."}
                 """.trimIndent()
             }
             else -> buildDeterministicBriefing(snapshot, profile)
         }
+    }
+
+    fun formatDurationHoursMins(totalMinutes: Int): String {
+        val safe = totalMinutes.coerceAtLeast(0)
+        val hrs = safe / 60
+        val mins = safe % 60
+        return when {
+            hrs > 0 && mins > 0 -> "${hrs}h ${mins}m"
+            hrs > 0 -> "${hrs}h"
+            else -> "${mins}m"
+        }
+    }
+
+    fun formatEventTimeRange(ev: CalendarEventItem, zone: ZoneId = ZoneId.systemDefault()): String {
+        if (ev.allDay) return "All day"
+        val start = Instant.ofEpochMilli(ev.startMillis).atZone(zone).format(timeFmt)
+        val end = Instant.ofEpochMilli(ev.endMillis).atZone(zone).format(timeFmt)
+        return "$start – $end"
+    }
+
+    fun formatMillisDateTime(millis: Long, zone: ZoneId = ZoneId.systemDefault()): String {
+        return Instant.ofEpochMilli(millis).atZone(zone).format(shortDateTimeFmt)
     }
 
     fun formatMoney(currency: String, amount: Double): String {
@@ -529,5 +656,13 @@ object ExecutiveAnalyticsEngine {
         return "$sign$currency ${String.format(Locale.US, "%,.2f", abs(amount))}"
     }
 
-    private fun fmt1(v: Float): String = String.format(Locale.US, "%.1f", v)
+    fun formatHourLabel(hour24: Int): String {
+        val h = hour24.coerceIn(0, 23)
+        return when {
+            h == 0 -> "12 AM"
+            h < 12 -> "$h AM"
+            h == 12 -> "12 PM"
+            else -> "${h - 12} PM"
+        }
+    }
 }

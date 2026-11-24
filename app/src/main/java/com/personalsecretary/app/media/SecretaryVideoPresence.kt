@@ -203,7 +203,7 @@ fun SecretaryPresenceBanner(
                     text = if (validFile != null && !playbackFailed) {
                         "Google Flow · ${activeSlot.title}"
                     } else {
-                        "Financial, Physical & Mental Consultant · Import Flow MP4 in Setup"
+                        "Financial & Physical Activity Consultant · Import Flow MP4 in Setup"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = TextMuted

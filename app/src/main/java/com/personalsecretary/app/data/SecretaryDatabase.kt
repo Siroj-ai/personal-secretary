@@ -93,10 +93,34 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
             )
             """.trimIndent()
         )
+
+        createTasksTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Additive future migrations go here.
+        if (oldVersion < 2) {
+            createTasksTable(db)
+        }
+    }
+
+    private fun createTasksTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS secretary_tasks (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                notes TEXT NOT NULL,
+                due_at_millis INTEGER,
+                priority TEXT NOT NULL,
+                category TEXT NOT NULL,
+                recurrence TEXT NOT NULL,
+                is_completed INTEGER NOT NULL,
+                reminder_enabled INTEGER NOT NULL,
+                created_at_millis INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_tasks_due ON secretary_tasks(is_completed, due_at_millis)")
     }
 
     suspend fun saveProfile(profile: SecretaryProfile) = withContext(Dispatchers.IO) {
@@ -276,47 +300,73 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
         out.reversed()
     }
 
-    suspend fun saveCheckIn(checkIn: MentalCheckIn) = withContext(Dispatchers.IO) {
+    suspend fun saveHourlySteps(map: Map<String, List<Long>>) = withContext(Dispatchers.IO) {
+        putKv(KEY_HOURLY_STEPS, json.encodeToString(map))
+    }
+
+    suspend fun loadHourlySteps(): Map<String, List<Long>> = withContext(Dispatchers.IO) {
+        val raw = getKv(KEY_HOURLY_STEPS) ?: return@withContext emptyMap()
+        runCatching { json.decodeFromString<Map<String, List<Long>>>(raw) }.getOrDefault(emptyMap())
+    }
+
+    suspend fun saveHealthVitals(vitals: HealthVitalsSummary) = withContext(Dispatchers.IO) {
+        putKv(KEY_HEALTH_VITALS, json.encodeToString(vitals))
+    }
+
+    suspend fun loadHealthVitals(): HealthVitalsSummary = withContext(Dispatchers.IO) {
+        val raw = getKv(KEY_HEALTH_VITALS) ?: return@withContext HealthVitalsSummary()
+        runCatching { json.decodeFromString<HealthVitalsSummary>(raw) }.getOrDefault(HealthVitalsSummary())
+    }
+
+    suspend fun upsertTask(task: SecretaryTask) = withContext(Dispatchers.IO) {
         val cv = ContentValues().apply {
-            put("id", checkIn.id)
-            put("timestamp_millis", checkIn.timestampMillis)
-            put("date_iso", checkIn.dateIso)
-            put("mood", checkIn.mood)
-            put("energy", checkIn.energy)
-            put("stress", checkIn.stress)
-            put("sleep_hours", checkIn.sleepHours)
-            put("tags_json", json.encodeToString(checkIn.tags))
-            put("note", checkIn.note)
+            put("id", task.id)
+            put("title", task.title)
+            put("notes", task.notes)
+            if (task.dueAtMillis != null) put("due_at_millis", task.dueAtMillis) else putNull("due_at_millis")
+            put("priority", task.priority.name)
+            put("category", task.category.name)
+            put("recurrence", task.recurrence.name)
+            put("is_completed", if (task.isCompleted) 1 else 0)
+            put("reminder_enabled", if (task.reminderEnabled) 1 else 0)
+            put("created_at_millis", task.createdAtMillis)
         }
-        writableDatabase.insertWithOnConflict("mental_checkins", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+        writableDatabase.insertWithOnConflict("secretary_tasks", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
-    suspend fun deleteCheckIn(id: String) = withContext(Dispatchers.IO) {
-        writableDatabase.delete("mental_checkins", "id = ?", arrayOf(id))
-    }
-
-    suspend fun loadCheckIns(limit: Int = 60): List<MentalCheckIn> = withContext(Dispatchers.IO) {
-        val out = mutableListOf<MentalCheckIn>()
+    suspend fun loadTasks(): List<SecretaryTask> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<SecretaryTask>()
         readableDatabase.rawQuery(
-            "SELECT id, timestamp_millis, date_iso, mood, energy, stress, sleep_hours, tags_json, note FROM mental_checkins ORDER BY timestamp_millis DESC LIMIT ?",
-            arrayOf(limit.toString())
+            """
+            SELECT id, title, notes, due_at_millis, priority, category, recurrence, is_completed, reminder_enabled, created_at_millis
+            FROM secretary_tasks
+            ORDER BY is_completed ASC,
+                     CASE WHEN due_at_millis IS NULL THEN 1 ELSE 0 END ASC,
+                     due_at_millis ASC,
+                     created_at_millis DESC
+            """.trimIndent(),
+            null
         ).use { c ->
             while (c.moveToNext()) {
-                val tags = runCatching { json.decodeFromString<List<String>>(c.getString(7)) }.getOrDefault(emptyList())
-                out += MentalCheckIn(
+                out += SecretaryTask(
                     id = c.getString(0),
-                    timestampMillis = c.getLong(1),
-                    dateIso = c.getString(2),
-                    mood = c.getInt(3),
-                    energy = c.getInt(4),
-                    stress = c.getInt(5),
-                    sleepHours = c.getFloat(6),
-                    tags = tags,
-                    note = c.getString(8)
+                    title = c.getString(1),
+                    notes = c.getString(2),
+                    dueAtMillis = if (c.isNull(3)) null else c.getLong(3),
+                    priority = runCatching { TaskPriority.valueOf(c.getString(4)) }.getOrDefault(TaskPriority.HIGH),
+                    category = runCatching { TaskCategory.valueOf(c.getString(5)) }.getOrDefault(TaskCategory.WORK),
+                    recurrence = runCatching { TaskRecurrence.valueOf(c.getString(6)) }.getOrDefault(TaskRecurrence.NONE),
+                    isCompleted = c.getInt(7) == 1,
+                    reminderEnabled = c.getInt(8) == 1,
+                    createdAtMillis = c.getLong(9)
                 )
             }
         }
         out
+    }
+
+    suspend fun deleteTask(taskId: String) = withContext(Dispatchers.IO) {
+        writableDatabase.delete("secretary_tasks", "id = ?", arrayOf(taskId))
     }
 
     suspend fun saveChatMessage(message: ChatMessage) = withContext(Dispatchers.IO) {
@@ -363,6 +413,7 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
             db.delete("daily_steps", null, null)
             db.delete("mental_checkins", null, null)
             db.delete("chat_messages", null, null)
+            db.delete("secretary_tasks", null, null)
             db.delete("app_kv", null, null)
             db.setTransactionSuccessful()
         } finally {
@@ -393,7 +444,7 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DB_NAME = "personal_secretary.db"
-        private const val DB_VERSION = 1
+        private const val DB_VERSION = 2
         private const val KEY_PROFILE = "profile_v1"
         private const val KEY_SSF = "ssf_v1"
         private const val KEY_EARNINGS = "earnings_v1"
@@ -401,5 +452,7 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
         private const val KEY_HYGIENE = "hygiene_v1"
         private const val KEY_VIDEO_SLOTS = "video_slots_v1"
         private const val KEY_LATEST_BRIEFING = "latest_briefing_v1"
+        private const val KEY_HOURLY_STEPS = "hourly_steps_v1"
+        private const val KEY_HEALTH_VITALS = "health_vitals_v1"
     }
 }

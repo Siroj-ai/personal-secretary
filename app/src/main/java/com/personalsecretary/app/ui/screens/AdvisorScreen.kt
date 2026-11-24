@@ -47,6 +47,7 @@ import com.personalsecretary.app.data.ChatRole
 import com.personalsecretary.app.data.SecretaryProfile
 import com.personalsecretary.app.data.SecretaryVideoSlot
 import com.personalsecretary.app.media.SecretaryPresenceBanner
+import com.personalsecretary.app.ui.components.formatExecutiveMarkdown
 import com.personalsecretary.app.ui.theme.AccentGold
 import com.personalsecretary.app.ui.theme.AccentGoldSoft
 import com.personalsecretary.app.ui.theme.CardBorder
@@ -82,11 +83,11 @@ fun AdvisorScreen(
 
     val quickPrompts = remember {
         listOf(
+            "Brief my schedule & work today",
             "Full financial & health audit",
             "Where am I leaking money?",
             "Check my SSF & Credit Card",
-            "Review my OP 13 steps this week",
-            "I feel stressed — help me reset"
+            "Review my steps & watch health"
         )
     }
 
@@ -218,7 +219,7 @@ fun AdvisorScreen(
                                 color = AccentGold
                             )
                             Text(
-                                text = "Ask about your Day Book cash flow, spending leaks, Credit Card or SSF position, OnePlus 13 step consistency, or stress & energy management. All numbers are verified locally from your private vault.",
+                                text = "Ask about your calendar meetings, work priorities, Day Book cash flow, Credit Card & SSF position, or your OnePlus 13 steps and watch health vitals. Everything runs privately on-device.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = TextSecondary
                             )
@@ -257,7 +258,11 @@ fun AdvisorScreen(
                             }
                             if (streamingReply.isNotEmpty()) {
                                 Text(
-                                    text = streamingReply,
+                                    text = formatExecutiveMarkdown(
+                                        raw = streamingReply,
+                                        boldColor = TextPrimary,
+                                        headingColor = AccentGold
+                                    ),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = TextPrimary
                                 )
@@ -345,11 +350,26 @@ private fun ChatBubble(message: ChatMessage) {
             modifier = Modifier.fillMaxWidth(if (isUser) 0.86f else 0.96f)
         ) {
             Column(modifier = Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(
-                    text = message.content,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextPrimary
-                )
+                if (isUser) {
+                    Text(
+                        text = message.content,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextPrimary
+                    )
+                } else {
+                    val formatted = remember(message.content) {
+                        formatExecutiveMarkdown(
+                            raw = message.content,
+                            boldColor = TextPrimary,
+                            headingColor = AccentGold
+                        )
+                    }
+                    Text(
+                        text = formatted,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextPrimary
+                    )
+                }
                 if (!isUser) {
                     val speed = message.tokensPerSec?.let {
                         " · ${String.format(Locale.US, "%.1f", it)} tok/s"

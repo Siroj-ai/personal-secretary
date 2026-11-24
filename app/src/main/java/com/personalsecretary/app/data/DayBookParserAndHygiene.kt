@@ -27,8 +27,15 @@ object DayBookParserAndHygiene {
     private val json = Json { ignoreUnknownKeys = true }
     private val isoFormatter = DateTimeFormatter.ISO_LOCAL_DATE
 
+    fun stripBomAndWhitespace(raw: String): String =
+        raw.trimStart('\uFEFF', ' ', '\t', '\r', '\n')
+
+    fun looksLikeJson(raw: String): Boolean =
+        stripBomAndWhitespace(raw).startsWith("{")
+
     fun parseAppsScriptBootstrapJson(rawJson: String, syncedLabel: String): ParsedDayBookBundle {
-        val root = json.parseToJsonElement(rawJson).jsonObject
+        val cleanJson = stripBomAndWhitespace(rawJson)
+        val root = json.parseToJsonElement(cleanJson).jsonObject
         val ok = (root["ok"] as? JsonPrimitive)?.booleanOrNull ?: true
         if (!ok) {
             val err = (root["error"] as? JsonPrimitive)?.contentOrNull ?: "Apps Script returned ok=false"
@@ -55,7 +62,7 @@ object DayBookParserAndHygiene {
     }
 
     fun parseCsvOrTsvDebitSheet(rawText: String, syncedLabel: String): ParsedDayBookBundle {
-        val lines = rawText.lines().filter { it.isNotBlank() }
+        val lines = rawText.trimStart('\uFEFF').lines().filter { it.isNotBlank() }
         val isTsv = lines.firstOrNull()?.contains('\t') == true
         val rows = lines.map { line ->
             if (isTsv) line.split('\t').map { it.trim() } else parseCsvLine(line)

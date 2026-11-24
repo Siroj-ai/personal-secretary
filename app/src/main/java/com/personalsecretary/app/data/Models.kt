@@ -1,6 +1,7 @@
 package com.personalsecretary.app.data
 
 import kotlinx.serialization.Serializable
+import kotlin.math.roundToInt
 
 @Serializable
 enum class AccountType {
@@ -91,17 +92,95 @@ data class DailyStepRecord(
     val updatedAtMillis: Long = System.currentTimeMillis()
 )
 
+data class StepDerivedMetrics(
+    val steps: Long,
+    val distanceKm: Double,
+    val caloriesKcal: Int,
+    val activeMinutes: Int
+) {
+    companion object {
+        fun fromSteps(steps: Long): StepDerivedMetrics {
+            val safe = steps.coerceAtLeast(0L)
+            val km = ((safe * 0.000762) * 100.0).roundToInt() / 100.0
+            val kcal = (safe * 0.04).roundToInt()
+            val mins = if (safe == 0L) 0 else maxOf(1, (safe / 95.0).roundToInt())
+            return StepDerivedMetrics(
+                steps = safe,
+                distanceKm = km,
+                caloriesKcal = kcal,
+                activeMinutes = mins
+            )
+        }
+    }
+}
+
 @Serializable
-data class MentalCheckIn(
+data class HealthVitalsSummary(
+    val lastNightSleepMinutes: Int = 0,
+    val avgSleepMinutes7d: Int = 0,
+    val latestHeartRateBpm: Int? = null,
+    val restingHeartRateBpm: Int? = null,
+    val latestSpo2Percent: Double? = null,
+    val workoutsThisWeek: Int = 0,
+    val workoutMinutesThisWeek: Int = 0,
+    val lastWorkoutTitle: String = "",
+    val syncedAtMillis: Long = 0L
+) {
+    val hasAnyWatchData: Boolean
+        get() = lastNightSleepMinutes > 0 ||
+            avgSleepMinutes7d > 0 ||
+            latestHeartRateBpm != null ||
+            restingHeartRateBpm != null ||
+            latestSpo2Percent != null ||
+            workoutsThisWeek > 0
+}
+
+@Serializable
+data class CalendarEventItem(
+    val id: Long,
+    val title: String,
+    val startMillis: Long,
+    val endMillis: Long,
+    val allDay: Boolean = false,
+    val location: String = "",
+    val calendarName: String = ""
+)
+
+@Serializable
+enum class TaskPriority(val label: String) {
+    URGENT("Urgent"),
+    HIGH("High"),
+    NORMAL("Normal")
+}
+
+@Serializable
+enum class TaskCategory(val label: String) {
+    WORK("Work"),
+    FINANCE("Finance"),
+    HEALTH("Health"),
+    PERSONAL("Personal")
+}
+
+@Serializable
+enum class TaskRecurrence(val label: String) {
+    NONE("One-time"),
+    DAILY("Daily"),
+    WEEKLY("Weekly"),
+    MONTHLY("Monthly")
+}
+
+@Serializable
+data class SecretaryTask(
     val id: String,
-    val timestampMillis: Long,
-    val dateIso: String,
-    val mood: Int,        // 1..5
-    val energy: Int,      // 1..5
-    val stress: Int,      // 1..5
-    val sleepHours: Float,
-    val tags: List<String> = emptyList(),
-    val note: String = ""
+    val title: String,
+    val notes: String = "",
+    val dueAtMillis: Long? = null,
+    val priority: TaskPriority = TaskPriority.HIGH,
+    val category: TaskCategory = TaskCategory.WORK,
+    val recurrence: TaskRecurrence = TaskRecurrence.NONE,
+    val isCompleted: Boolean = false,
+    val reminderEnabled: Boolean = true,
+    val createdAtMillis: Long = System.currentTimeMillis()
 )
 
 @Serializable
@@ -111,9 +190,9 @@ enum class SecretaryVideoSlot(
     val subtitle: String
 ) {
     IDLE("idle", "At Desk (Ambient)", "Default executive presence on Briefing & Consultation screens"),
-    THINKING("thinking", "Reviewing Dossier", "Plays while Gemma 4 E4B analyzes your finances and health"),
+    THINKING("thinking", "Reviewing Dossier", "Plays while Gemma 4 E4B analyzes your finances and activity"),
     SPEAKING("speaking", "Delivering Briefing", "Plays while streaming consultation advice or voice briefing"),
-    ALERT("alert", "Executive Alert", "Optional state when a budget, stress, or balance alert is active")
+    ALERT("alert", "Executive Alert", "Optional state when a budget or balance alert is active")
 }
 
 @Serializable
@@ -139,9 +218,8 @@ data class SecretaryProfile(
     val currencySymbol: String = "Rs.",
     val monthlySpendBudget: Double = 60000.0,
     val dailyStepGoal: Int = 8000,
-    val sleepGoalHours: Float = 7.5f,
     val financialGoals: String = "Control discretionary spending, maintain healthy cash runway, and track long-term savings vs. loans.",
-    val healthGoals: String = "Consistently reach 8,000+ daily steps, protect sleep quality, and manage daily stress.",
+    val healthGoals: String = "Hit my daily step goal consistently and maintain active hourly movement.",
     val customDossierNotes: String = "",
     val spreadsheetId: String = "",
     val appsScriptUrl: String = "",
@@ -180,7 +258,7 @@ enum class InsightSeverity {
 enum class InsightDomain {
     FINANCIAL,
     PHYSICAL,
-    MENTAL,
+    SCHEDULE,
     CROSS_DOMAIN
 }
 
@@ -213,14 +291,19 @@ data class ExecutiveSnapshot(
     val hygieneReport: FinancialHygieneReport = FinancialHygieneReport(),
     val todaySteps: Long = 0L,
     val todayStepSource: StepSource = StepSource.HARDWARE_SENSOR,
+    val todayMetrics: StepDerivedMetrics = StepDerivedMetrics.fromSteps(0L),
+    val stepsVsYesterdayPercent: Int? = null,
     val avgSteps7d: Long = 0L,
+    val weeklyStepsTotal: Long = 0L,
     val stepStreakDays: Int = 0,
     val recentSteps7d: List<DailyStepRecord> = emptyList(),
-    val latestCheckIn: MentalCheckIn? = null,
-    val avgMood7d: Float = 0f,
-    val avgEnergy7d: Float = 0f,
-    val avgStress7d: Float = 0f,
-    val avgSleep7d: Float = 0f,
-    val checkInCount14d: Int = 0,
+    val hourlyStepsByDate: Map<String, List<Long>> = emptyMap(),
+    val peakHourToday: Int? = null,
+    val healthVitals: HealthVitalsSummary = HealthVitalsSummary(),
+    val todayEvents: List<CalendarEventItem> = emptyList(),
+    val upcomingEvents7d: List<CalendarEventItem> = emptyList(),
+    val pendingTasks: List<SecretaryTask> = emptyList(),
+    val overdueTasksCount: Int = 0,
+    val dueTodayTasksCount: Int = 0,
     val insights: List<ExecutiveInsight> = emptyList()
 )

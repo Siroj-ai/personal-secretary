@@ -1,0 +1,16 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Clean monochrome secretary calendar + spark silhouette for ColorOS 17 themed icons -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,34 L72,34 Q78,34 78,40 L78,70 Q78,76 72,76 L36,76 Q30,76 30,70 L30,40 Q30,34 36,34 Z M36,46 L36,70 L72,70 L72,46 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,28 L46,28 L46,38 L42,38 Z M62,28 L66,28 L66,38 L62,38 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,51 L56.5,56.5 L62,59 L56.5,61.5 L54,67 L51.5,61.5 L46,59 L51.5,56.5 Z" />
+</vector>

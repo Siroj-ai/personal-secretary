@@ -1,6 +1,7 @@
 package com.personalsecretary.app.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -39,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.personalsecretary.app.data.AccountType
 import com.personalsecretary.app.data.ExecutiveAnalyticsEngine
@@ -106,16 +109,25 @@ fun FinancesScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 10.dp)
+                ) {
                     Text(
                         text = "Financial Ledger",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = TextPrimary
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = snapshot.hygieneReport.lastSyncedLabel,
                         style = MaterialTheme.typography.bodySmall,
-                        color = TextMuted
+                        color = TextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -123,11 +135,15 @@ fun FinancesScreen(
                         onClick = onSyncNow,
                         enabled = !isSyncing,
                         shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
                     ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(Modifier.size(4.dp))
-                        Text(if (isSyncing) "Syncing" else "Sync")
+                        Text(
+                            text = if (isSyncing) "Syncing" else "Sync",
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
                     Button(
                         onClick = { showAddDialog = true },
@@ -135,9 +151,13 @@ fun FinancesScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = AccentGold, contentColor = ObsidianBg),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(Modifier.size(4.dp))
-                        Text("Log")
+                        Text(
+                            text = "Log",
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
                 }
             }
@@ -328,7 +348,7 @@ fun FinancesScreen(
                 ExecutiveCard {
                     Text(
                         text = if (transactions.isEmpty()) {
-                            "No transactions loaded yet. Configure your Day Book Apps Script URL or import a CSV/TSV file in Health & Setup -> Setup."
+                            "No transactions loaded yet. Configure your Day Book Apps Script URL or import a JSON/CSV file in Steps & Desk -> Secretary Setup."
                         } else {
                             "No transactions match your current filter."
                         },
@@ -448,9 +468,22 @@ private fun AddTransactionDialog(
         title = { Text("Log Transaction") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = isDebit, onClick = { isDebit = true }, label = { Text("Expense (Debit)") })
-                    FilterChip(selected = !isDebit, onClick = { isDebit = false; category = "Income" }, label = { Text("Income (Credit)") })
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = isDebit,
+                        onClick = { isDebit = true },
+                        label = { Text("Expense (Debit)", maxLines = 1, softWrap = false) }
+                    )
+                    FilterChip(
+                        selected = !isDebit,
+                        onClick = { isDebit = false; category = "Income" },
+                        label = { Text("Income (Credit)", maxLines = 1, softWrap = false) }
+                    )
                 }
                 OutlinedTextField(
                     value = desc,
@@ -473,9 +506,18 @@ private fun AddTransactionDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    quickCategories.take(3).forEach { cat ->
-                        FilterChip(selected = category == cat, onClick = { category = cat }, label = { Text(cat.substringBefore(" ")) })
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    quickCategories.forEach { cat ->
+                        FilterChip(
+                            selected = category == cat,
+                            onClick = { category = cat },
+                            label = { Text(cat.substringBefore(" "), maxLines = 1, softWrap = false) }
+                        )
                     }
                 }
                 if (hasAppsScript) {

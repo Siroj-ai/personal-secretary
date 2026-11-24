@@ -16,9 +16,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.EventNote
 import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -41,6 +42,7 @@ import com.personalsecretary.app.ui.screens.BriefingScreen
 import com.personalsecretary.app.ui.screens.FinancesScreen
 import com.personalsecretary.app.ui.screens.HealthAndSetupScreen
 import com.personalsecretary.app.ui.screens.HubSubTab
+import com.personalsecretary.app.ui.screens.ScheduleScreen
 import com.personalsecretary.app.ui.theme.AccentGold
 import com.personalsecretary.app.ui.theme.AccentGoldSoft
 import com.personalsecretary.app.ui.theme.CardSurface
@@ -52,8 +54,9 @@ import com.personalsecretary.app.viewmodel.SecretaryViewModel
 private enum class TopDestination(val label: String, val icon: ImageVector) {
     BRIEFING("Briefing", Icons.Default.Dashboard),
     ADVISOR("Advisor", Icons.Default.SupportAgent),
+    SCHEDULE("Schedule", Icons.Default.EventNote),
     FINANCES("Finances", Icons.Default.AccountBalanceWallet),
-    HEALTH_SETUP("Health & Desk", Icons.Default.Favorite)
+    HEALTH_SETUP("Health", Icons.AutoMirrored.Filled.DirectionsWalk)
 }
 
 class MainActivity : ComponentActivity() {
@@ -116,7 +119,7 @@ private fun PersonalSecretaryAppRoot(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var currentTab by remember { mutableStateOf(TopDestination.BRIEFING) }
-    var healthSubTab by remember { mutableStateOf(HubSubTab.PHYSICAL) }
+    var healthSubTab by remember { mutableStateOf(HubSubTab.STEPS) }
     var pendingVideoSlot by remember { mutableStateOf<SecretaryVideoSlot?>(null) }
 
     val healthConnectLauncher = rememberLauncherForActivityResult(
@@ -129,6 +132,12 @@ private fun PersonalSecretaryAppRoot(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) {
         viewModel.refreshPermissionsAndSteps()
+    }
+
+    val calendarPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        viewModel.refreshScheduleAndCalendar()
     }
 
     val csvPickerLauncher = rememberLauncherForActivityResult(
@@ -202,14 +211,45 @@ private fun PersonalSecretaryAppRoot(
                         currentTab = TopDestination.ADVISOR
                         if (!preset.isNullOrBlank()) viewModel.sendConsultationMessage(preset)
                     },
+                    onOpenSchedule = { currentTab = TopDestination.SCHEDULE },
                     onOpenFinances = { currentTab = TopDestination.FINANCES },
                     onOpenPhysical = {
-                        healthSubTab = HubSubTab.PHYSICAL
+                        healthSubTab = HubSubTab.STEPS
                         currentTab = TopDestination.HEALTH_SETUP
+                    }
+                )
+
+                TopDestination.SCHEDULE -> ScheduleScreen(
+                    snapshot = uiState.snapshot,
+                    tasks = uiState.tasks,
+                    calendarPermissionGranted = uiState.calendarPermissionGranted,
+                    statusToast = uiState.statusToast,
+                    onRequestCalendarPermission = {
+                        val perms = buildList {
+                            add(Manifest.permission.READ_CALENDAR)
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                add(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                        }.toTypedArray()
+                        calendarPermissionLauncher.launch(perms)
                     },
-                    onOpenMental = {
-                        healthSubTab = HubSubTab.MENTAL
-                        currentTab = TopDestination.HEALTH_SETUP
+                    onRefreshSchedule = { viewModel.refreshScheduleAndCalendar() },
+                    onAddTask = { title, notes, dueMillis, priority, category, recurrence, reminder ->
+                        viewModel.addSecretaryTask(
+                            title = title,
+                            notes = notes,
+                            dueAtMillis = dueMillis,
+                            priority = priority,
+                            category = category,
+                            recurrence = recurrence,
+                            reminderEnabled = reminder
+                        )
+                    },
+                    onToggleTask = { viewModel.toggleTaskCompleted(it) },
+                    onDeleteTask = { viewModel.deleteSecretaryTask(it) },
+                    onAskClaraAboutSchedule = {
+                        currentTab = TopDestination.ADVISOR
+                        viewModel.sendConsultationMessage("Prioritize my schedule, meetings, and open work tasks for today alongside my budget and energy.")
                     }
                 )
 
@@ -255,7 +295,6 @@ private fun PersonalSecretaryAppRoot(
                     snapshot = uiState.snapshot,
                     profile = uiState.profile,
                     stepPermissions = uiState.stepPermissions,
-                    checkIns = uiState.checkIns,
                     videoSlots = uiState.videoSlots,
                     detectedModelFiles = uiState.detectedModels,
                     engineStatusLabel = uiState.engineState.activeBackendLabel,
@@ -292,10 +331,6 @@ private fun PersonalSecretaryAppRoot(
                     onOpenHealthConnectSettings = onOpenHealthConnectSettings,
                     onSyncSteps = { viewModel.refreshPermissionsAndSteps() },
                     onLogManualSteps = { viewModel.logManualSteps(it) },
-                    onSaveCheckIn = { m, e, s, sl, tags, note ->
-                        viewModel.saveMentalCheckIn(m, e, s, sl, tags, note)
-                    },
-                    onDeleteCheckIn = { viewModel.deleteMentalCheckIn(it) },
                     onSaveProfile = { viewModel.updateProfile(it) },
                     onSyncDayBook = { viewModel.syncDayBook() },
                     onImportCsvPicker = {

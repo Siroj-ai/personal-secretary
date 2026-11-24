@@ -9,6 +9,7 @@ import com.personalsecretary.app.BuildConfig
 import com.personalsecretary.app.ai.GemmaAdvisorEngine
 import com.personalsecretary.app.ai.GemmaEngineState
 import com.personalsecretary.app.data.AccountType
+import com.personalsecretary.app.data.CalendarEventItem
 import com.personalsecretary.app.data.ChatMessage
 import com.personalsecretary.app.data.ChatRole
 import com.personalsecretary.app.data.DailyStepRecord
@@ -18,17 +19,23 @@ import com.personalsecretary.app.data.EarningEntry
 import com.personalsecretary.app.data.ExecutiveAnalyticsEngine
 import com.personalsecretary.app.data.ExecutiveSnapshot
 import com.personalsecretary.app.data.FinancialHygieneReport
+import com.personalsecretary.app.data.HealthVitalsSummary
 import com.personalsecretary.app.data.InsightSeverity
-import com.personalsecretary.app.data.MentalCheckIn
 import com.personalsecretary.app.data.SecretaryDatabase
 import com.personalsecretary.app.data.SecretaryProfile
+import com.personalsecretary.app.data.SecretaryTask
 import com.personalsecretary.app.data.SecretaryVideoSlot
 import com.personalsecretary.app.data.SsfSummary
 import com.personalsecretary.app.data.StepSource
+import com.personalsecretary.app.data.TaskCategory
+import com.personalsecretary.app.data.TaskPriority
+import com.personalsecretary.app.data.TaskRecurrence
 import com.personalsecretary.app.data.TransactionRecord
 import com.personalsecretary.app.health.OnePlusStepTracker
 import com.personalsecretary.app.health.StepPermissionStatus
 import com.personalsecretary.app.media.SecretaryMediaStore
+import com.personalsecretary.app.schedule.DeviceCalendarReader
+import com.personalsecretary.app.schedule.TaskReminderScheduler
 import com.personalsecretary.app.update.OtaUpdateManager
 import com.personalsecretary.app.update.OtaUpdateState
 import kotlinx.coroutines.Dispatchers
@@ -51,7 +58,8 @@ data class SecretaryUiState(
     val profile: SecretaryProfile = SecretaryProfile(),
     val snapshot: ExecutiveSnapshot = ExecutiveSnapshot(),
     val transactions: List<TransactionRecord> = emptyList(),
-    val checkIns: List<MentalCheckIn> = emptyList(),
+    val tasks: List<SecretaryTask> = emptyList(),
+    val calendarPermissionGranted: Boolean = false,
     val chatMessages: List<ChatMessage> = emptyList(),
     val streamingReply: String = "",
     val isGeneratingChat: Boolean = false,
@@ -82,6 +90,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
     private val database = SecretaryDatabase(application)
     private val syncClient = DayBookSyncClient()
     private val mediaStore = SecretaryMediaStore(application)
+    private val calendarReader = DeviceCalendarReader(application)
     val stepTracker = OnePlusStepTracker(application, database, viewModelScope)
     val otaManager = OtaUpdateManager(application)
     private val gemmaEngine = GemmaAdvisorEngine(application)
@@ -93,6 +102,10 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
     private var earningsCache = emptyList<EarningEntry>()
     private var hygieneCache = FinancialHygieneReport()
     private var stepsCache = emptyList<DailyStepRecord>()
+    private var hourlyStepsCache = emptyMap<String, List<Long>>()
+    private var healthVitalsCache = HealthVitalsSummary()
+    private var calendarEventsCache = emptyList<CalendarEventItem>()
+    private var tasksCache = emptyList<SecretaryTask>()
 
     private var generationJob: Job? = null
     private var tts: TextToSpeech? = null
@@ -126,6 +139,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
             stepTracker.liveHardwareStepsToday.collect { live ->
                 if (live != null) {
                     stepsCache = database.loadStepRecords(60)
+                    hourlyStepsCache = database.loadHourlySteps()
                     recomputeSnapshot()
                 }
             }
@@ -140,25 +154,45 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
             earningsCache = database.loadEarnings()
             hygieneCache = database.loadHygieneReport()
             stepsCache = database.loadStepRecords(60)
-            val checkIns = database.loadCheckIns(60)
+            hourlyStepsCache = database.loadHourlySteps()
+            healthVitalsCache = database.loadHealthVitals()
+            tasksCache = database.loadTasks()
+            val calGranted = calendarReader.isCalendarPermissionGranted()
+            calendarEventsCache = if (calGranted) calendarReader.loadUpcomingEvents(7) else emptyList()
+            TaskReminderScheduler.rescheduleAllPending(getApplication(), tasksCache)
             val chat = database.loadChatMessages(80)
             val videos = database.loadVideoSlots()
             val briefing = database.loadLatestBriefing()
             val detected = withContext(Dispatchers.IO) { mediaStore.scanKnownModelPaths() }
 
             // Auto-fill model path if not set yet and gemma-4-E4B-it.litertlm is already on device
-            val resolvedProfile = if (profile.modelPath.isBlank() && detected.isNotEmpty()) {
+            var resolvedProfile = if (profile.modelPath.isBlank() && detected.isNotEmpty()) {
                 val preferred = detected.firstOrNull { it.name.contains("gemma-4", ignoreCase = true) } ?: detected.first()
-                profile.copy(modelPath = preferred.absolutePath).also { database.saveProfile(it) }
+                profile.copy(modelPath = preferred.absolutePath)
             } else {
                 profile
+            }
+
+            // One-time cleanup if legacy pre-v1.0.3 default text (hardcoded 8,000+ / stress) is still saved verbatim
+            val legacyHealthDefaults = setOf(
+                "Consistently reach 8,000+ daily steps, protect sleep quality, and manage daily stress.",
+                "Consistently reach 8,000+ daily steps and maintain strong daily activity."
+            )
+            if (resolvedProfile.healthGoals.trim() in legacyHealthDefaults) {
+                resolvedProfile = resolvedProfile.copy(
+                    healthGoals = "Hit my daily step goal consistently and maintain active hourly movement."
+                )
+            }
+            if (resolvedProfile != profile) {
+                database.saveProfile(resolvedProfile)
             }
 
             _uiState.update {
                 it.copy(
                     profile = resolvedProfile,
                     transactions = txns,
-                    checkIns = checkIns,
+                    tasks = tasksCache,
+                    calendarPermissionGranted = calGranted,
                     chatMessages = chat,
                     videoSlots = videos,
                     briefingText = briefing,
@@ -184,8 +218,11 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
             earnings = earningsCache,
             hygiene = hygieneCache,
             steps = stepsCache,
-            checkIns = current.checkIns,
-            profile = current.profile
+            hourlyStepsByDate = hourlyStepsCache,
+            profile = current.profile,
+            healthVitals = healthVitalsCache,
+            calendarEvents = calendarEventsCache,
+            tasks = tasksCache
         )
         _uiState.update { it.copy(snapshot = snap) }
     }
@@ -193,6 +230,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
     fun onForegroundResume() {
         stepTracker.startHardwareSensorIfPermitted()
         refreshPermissionsAndSteps()
+        refreshScheduleAndCalendar()
     }
 
     fun onBackgroundPause() {
@@ -215,14 +253,118 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
             }
             if (status.healthConnectStepsGranted) {
                 stepTracker.syncStepsFromHealthConnect(days = 14)
+            } else if (status.watchVitalsGranted) {
+                stepTracker.syncWatchVitalsFromHealthConnect()
             }
             stepsCache = database.loadStepRecords(60)
+            hourlyStepsCache = database.loadHourlySteps()
+            healthVitalsCache = database.loadHealthVitals()
+            recomputeSnapshot()
+        }
+    }
+
+    fun refreshScheduleAndCalendar() {
+        viewModelScope.launch {
+            val granted = calendarReader.isCalendarPermissionGranted()
+            calendarEventsCache = if (granted) calendarReader.loadUpcomingEvents(7) else emptyList()
+            tasksCache = database.loadTasks()
+            _uiState.update {
+                it.copy(
+                    calendarPermissionGranted = granted,
+                    tasks = tasksCache
+                )
+            }
+            recomputeSnapshot()
+        }
+    }
+
+    fun addSecretaryTask(
+        title: String,
+        notes: String,
+        dueAtMillis: Long?,
+        priority: TaskPriority,
+        category: TaskCategory,
+        recurrence: TaskRecurrence,
+        reminderEnabled: Boolean
+    ) {
+        val cleanTitle = title.trim()
+        if (cleanTitle.isEmpty()) return
+        viewModelScope.launch {
+            val task = SecretaryTask(
+                id = "task_${UUID.randomUUID().toString().take(8)}",
+                title = cleanTitle,
+                notes = notes.trim(),
+                dueAtMillis = dueAtMillis,
+                priority = priority,
+                category = category,
+                recurrence = recurrence,
+                isCompleted = false,
+                reminderEnabled = reminderEnabled
+            )
+            database.upsertTask(task)
+            TaskReminderScheduler.scheduleTaskReminder(getApplication(), task)
+            tasksCache = database.loadTasks()
+            _uiState.update {
+                it.copy(
+                    tasks = tasksCache,
+                    statusToast = if (reminderEnabled && dueAtMillis != null) {
+                        "Scheduled '${task.title}' with reminder alert."
+                    } else {
+                        "Added '${task.title}' to your desk."
+                    }
+                )
+            }
+            recomputeSnapshot()
+        }
+    }
+
+    fun toggleTaskCompleted(taskId: String) {
+        viewModelScope.launch {
+            val current = tasksCache.firstOrNull { it.id == taskId } ?: return@launch
+            val nowDone = !current.isCompleted
+            val updated = current.copy(isCompleted = nowDone)
+            database.upsertTask(updated)
+
+            if (nowDone) {
+                TaskReminderScheduler.cancelTaskReminder(getApplication(), current.id)
+                // If recurring, automatically schedule the next occurrence!
+                val due = current.dueAtMillis
+                if (current.recurrence != TaskRecurrence.NONE && due != null) {
+                    val nextDue = TaskReminderScheduler.computeNextOccurrenceMillis(due, current.recurrence)
+                    if (nextDue != null) {
+                        val nextTask = current.copy(
+                            id = "task_${UUID.randomUUID().toString().take(8)}",
+                            dueAtMillis = nextDue,
+                            isCompleted = false,
+                            createdAtMillis = System.currentTimeMillis()
+                        )
+                        database.upsertTask(nextTask)
+                        TaskReminderScheduler.scheduleTaskReminder(getApplication(), nextTask)
+                    }
+                }
+            } else {
+                TaskReminderScheduler.scheduleTaskReminder(getApplication(), updated)
+            }
+
+            tasksCache = database.loadTasks()
+            _uiState.update { it.copy(tasks = tasksCache) }
+            recomputeSnapshot()
+        }
+    }
+
+    fun deleteSecretaryTask(taskId: String) {
+        viewModelScope.launch {
+            TaskReminderScheduler.cancelTaskReminder(getApplication(), taskId)
+            database.deleteTask(taskId)
+            tasksCache = database.loadTasks()
+            _uiState.update { it.copy(tasks = tasksCache, statusToast = "Removed task from schedule.") }
             recomputeSnapshot()
         }
     }
 
     fun syncAllSources() {
         refreshPermissionsAndSteps()
+        refreshScheduleAndCalendar()
         syncDayBook()
     }
 
@@ -277,10 +419,11 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                     ?.bufferedReader()?.use { it.readText() }
                     ?: throw IllegalStateException("Unable to read selected file.")
                 val ts = SimpleDateFormat("MMM d, hh:mm a", Locale.getDefault()).format(Date())
-                val bundle = if (text.trimStart().startsWith("{")) {
-                    DayBookParserAndHygiene.parseAppsScriptBootstrapJson(text, "Imported JSON ($ts)")
+                val cleanText = DayBookParserAndHygiene.stripBomAndWhitespace(text)
+                val bundle = if (DayBookParserAndHygiene.looksLikeJson(cleanText)) {
+                    DayBookParserAndHygiene.parseAppsScriptBootstrapJson(cleanText, "Imported JSON ($ts)")
                 } else {
-                    DayBookParserAndHygiene.parseCsvOrTsvDebitSheet(text, "Imported CSV/TSV ($ts)")
+                    DayBookParserAndHygiene.parseCsvOrTsvDebitSheet(cleanText, "Imported CSV/TSV ($ts)")
                 }
                 database.saveFinancialBundle(
                     transactions = bundle.transactions,
@@ -375,59 +518,21 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun logManualSteps(stepsToday: Long) {
         viewModelScope.launch {
-            val iso = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
-            database.upsertStepRecords(
-                listOf(DailyStepRecord(iso, stepsToday, StepSource.MANUAL, System.currentTimeMillis()))
-            )
+            stepTracker.anchorManualStepsToday(stepsToday)
             stepsCache = database.loadStepRecords(60)
+            hourlyStepsCache = database.loadHourlySteps()
             recomputeSnapshot()
             _uiState.update { it.copy(statusToast = "Updated today's steps to $stepsToday.") }
         }
     }
 
-    fun saveMentalCheckIn(
-        mood: Int,
-        energy: Int,
-        stress: Int,
-        sleepHours: Float,
-        tags: List<String>,
-        note: String
-    ) {
-        viewModelScope.launch {
-            val now = System.currentTimeMillis()
-            val iso = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
-            val item = MentalCheckIn(
-                id = "ci_${UUID.randomUUID().toString().take(8)}",
-                timestampMillis = now,
-                dateIso = iso,
-                mood = mood,
-                energy = energy,
-                stress = stress,
-                sleepHours = sleepHours,
-                tags = tags,
-                note = note
-            )
-            database.saveCheckIn(item)
-            val all = database.loadCheckIns(60)
-            _uiState.update { it.copy(checkIns = all, statusToast = "Private check-in recorded.") }
-            recomputeSnapshot()
-        }
-    }
-
-    fun deleteMentalCheckIn(id: String) {
-        viewModelScope.launch {
-            database.deleteCheckIn(id)
-            val all = database.loadCheckIns(60)
-            _uiState.update { it.copy(checkIns = all) }
-            recomputeSnapshot()
-        }
-    }
-
     fun updateProfile(updated: SecretaryProfile) {
+        // Update state synchronously first so immediate follow-up actions (Save & Sync, Check for Updates)
+        // always read the freshly edited values without a coroutine race.
+        _uiState.update { it.copy(profile = updated, statusToast = "Executive profile saved.") }
+        recomputeSnapshot()
         viewModelScope.launch {
             database.saveProfile(updated)
-            _uiState.update { it.copy(profile = updated, statusToast = "Executive profile saved.") }
-            recomputeSnapshot()
         }
     }
 
@@ -563,10 +668,9 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                 val dossier = ExecutiveAnalyticsEngine.buildGemmaDossier(
                     snapshot = st.snapshot,
                     profile = st.profile,
-                    recentTransactions = st.transactions,
-                    recentCheckIns = st.checkIns
+                    recentTransactions = st.transactions
                 )
-                val prompt = "Deliver my concise Executive Briefing covering: 1) Financial Health & Cash Flow, 2) OnePlus 13 Steps & Physical Pace, 3) Mental Bandwidth & Stress, and 4) Top 2 concrete actions for today."
+                val prompt = "Deliver my concise Executive Briefing covering: 1) Today's Schedule & Work Priorities, 2) Financial Health & Cash Flow, 3) Physical Health (OnePlus 13 Steps & Watch Vitals if synced), and 4) Top 2 concrete actions for today."
                 val res = gemmaEngine.generateConsultation(
                     profile = st.profile,
                     dossierContext = dossier,
@@ -616,8 +720,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                 val dossier = ExecutiveAnalyticsEngine.buildGemmaDossier(
                     snapshot = st.snapshot,
                     profile = st.profile,
-                    recentTransactions = st.transactions,
-                    recentCheckIns = st.checkIns
+                    recentTransactions = st.transactions
                 )
                 val recentTurns = updatedHistory.dropLast(1).takeLast(4).joinToString("\n") { m ->
                     "${if (m.role == ChatRole.USER) "Client" else st.profile.secretaryName}: ${m.content.take(260)}"
@@ -841,7 +944,12 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun speakText(text: String) {
         if (!ttsReady) return
-        val clean = text.replace("•", ". ").replace("#", "").take(900)
+        val clean = text
+            .replace("•", ". ")
+            .replace("**", "")
+            .replace("*", "")
+            .replace("#", "")
+            .take(900)
         tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "sec_brief")
     }
 

@@ -4,7 +4,6 @@ import com.personalsecretary.app.data.AccountType
 import com.personalsecretary.app.data.DailyStepRecord
 import com.personalsecretary.app.data.DayBookParserAndHygiene
 import com.personalsecretary.app.data.ExecutiveAnalyticsEngine
-import com.personalsecretary.app.data.MentalCheckIn
 import com.personalsecretary.app.data.SecretaryProfile
 import com.personalsecretary.app.data.StepSource
 import org.junit.Assert.assertEquals
@@ -74,7 +73,7 @@ class DayBookAndAnalyticsTest {
     }
 
     @Test
-    fun computesCrossDomainSnapshotAndExecutiveDossier() {
+    fun computesFinancialAndPhysicalSnapshotWithSamsungMetrics() {
         val txs = DayBookParserAndHygiene.parseCsvOrTsvDebitSheet(
             """
             Transaction Date,Description,Debit,Credit,Balance,Category
@@ -86,13 +85,11 @@ class DayBookAndAnalyticsTest {
         )
         val steps = listOf(
             DailyStepRecord("2026-11-20", 9200, StepSource.HEALTH_CONNECT),
-            DailyStepRecord("2026-11-21", 2100, StepSource.HEALTH_CONNECT),
+            DailyStepRecord("2026-11-21", 4000, StepSource.HEALTH_CONNECT),
             DailyStepRecord("2026-11-22", 8500, StepSource.HEALTH_CONNECT)
         )
-        val checkIns = listOf(
-            MentalCheckIn("1", 1000L, "2026-11-22", mood = 4, energy = 4, stress = 2, sleepHours = 7.5f),
-            MentalCheckIn("2", 900L, "2026-11-21", mood = 2, energy = 2, stress = 5, sleepHours = 5.5f),
-            MentalCheckIn("3", 800L, "2026-11-20", mood = 4, energy = 4, stress = 2, sleepHours = 7.5f)
+        val hourly = mapOf(
+            "2026-11-22" to List(24) { hr -> if (hr == 18) 3200L else if (hr == 9) 1800L else 0L }
         )
 
         val profile = SecretaryProfile(userName = "Client", dailyStepGoal = 8000, monthlySpendBudget = 50000.0)
@@ -102,19 +99,53 @@ class DayBookAndAnalyticsTest {
             earnings = txs.earnings,
             hygiene = txs.hygieneReport,
             steps = steps,
-            checkIns = checkIns,
+            hourlyStepsByDate = hourly,
             profile = profile,
             today = LocalDate.of(2026, 11, 22)
         )
 
         assertEquals(6350.0, snap.debitBalance, 0.01)
         assertEquals(8500L, snap.todaySteps)
-        assertTrue(snap.insights.any { it.id == "stress_spend_corr" })
-        assertTrue(snap.insights.any { it.id == "steps_mood_corr" })
+        assertEquals(21700L, snap.weeklyStepsTotal)
+        assertEquals(18, snap.peakHourToday)
+        assertTrue(snap.todayMetrics.distanceKm > 6.0)
+        assertTrue(snap.todayMetrics.caloriesKcal > 300)
+        assertTrue(snap.insights.any { it.id == "habit_spend" })
+        assertTrue(snap.insights.any { it.id == "steps_hit" })
 
-        val dossier = ExecutiveAnalyticsEngine.buildGemmaDossier(snap, profile, txs.transactions, checkIns)
+        val dossier = ExecutiveAnalyticsEngine.buildGemmaDossier(snap, profile, txs.transactions)
         assertTrue(dossier.contains("EXECUTIVE CLIENT DOSSIER"))
         assertTrue(dossier.contains("6,350.00"))
         assertTrue(dossier.contains("8500 / 8000"))
+        assertTrue(dossier.contains("6 PM"))
+    }
+
+    @Test
+    fun stripsUtf8BomFromAppsScriptJsonAndCsvExports() {
+        val bomJson = "\uFEFF" + """
+            {
+              "ok": true,
+              "data": {
+                "Debit Card": [
+                  ["Transaction Date", "Description", "Debit", "Credit", "Balance", "Category"],
+                  ["11/24/2026", "khaja", "250", "", "50000.00", "Food & Dining"]
+                ],
+                "Credit Card": [
+                  ["Transaction Date", "Description", "Debit", "Credit", "Balance"],
+                  ["11/24/2026", "Balance", "0", "0", "-4500.00"]
+                ],
+                "Social Security Fund": [],
+                "Earnings vs Salary": []
+              }
+            }
+        """.trimIndent()
+
+        assertTrue(DayBookParserAndHygiene.looksLikeJson(bomJson))
+        val bundle = DayBookParserAndHygiene.parseAppsScriptBootstrapJson(bomJson, "BOM Test")
+        assertEquals(1, bundle.hygieneReport.uniqueDebitRows)
+        val debit = bundle.transactions.first { it.accountType == AccountType.DEBIT }
+        assertEquals(50000.00, debit.balance, 0.01)
+        val credit = bundle.transactions.first { it.accountType == AccountType.CREDIT }
+        assertEquals(-4500.00, credit.balance, 0.01)
     }
 }

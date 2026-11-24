@@ -18,6 +18,7 @@ import com.personalsecretary.app.R
 import com.personalsecretary.app.data.ExecutiveAnalyticsEngine
 import com.personalsecretary.app.data.SecretaryDatabase
 import com.personalsecretary.app.health.OnePlusStepTracker
+import com.personalsecretary.app.schedule.DeviceCalendarReader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import java.util.concurrent.TimeUnit
@@ -31,9 +32,13 @@ class DailyBriefingWorker(
         val db = SecretaryDatabase(applicationContext)
         val profile = db.loadProfile()
 
-        // Try refreshing Health Connect steps silently if background permission was granted
+        // Try refreshing Health Connect steps + watch vitals silently if background permission was granted
         val tracker = OnePlusStepTracker(applicationContext, db, CoroutineScope(Dispatchers.IO))
         tracker.syncStepsFromHealthConnect(days = 7)
+
+        val calReader = DeviceCalendarReader(applicationContext)
+        val events = calReader.loadUpcomingEvents(daysAhead = 7)
+        val tasks = db.loadTasks()
 
         val snapshot = ExecutiveAnalyticsEngine.computeSnapshot(
             transactions = db.loadTransactions(),
@@ -41,8 +46,11 @@ class DailyBriefingWorker(
             earnings = db.loadEarnings(),
             hygiene = db.loadHygieneReport(),
             steps = db.loadStepRecords(60),
-            checkIns = db.loadCheckIns(30),
-            profile = profile
+            hourlyStepsByDate = db.loadHourlySteps(),
+            profile = profile,
+            healthVitals = db.loadHealthVitals(),
+            calendarEvents = events,
+            tasks = tasks
         )
 
         val remainingSteps = (profile.dailyStepGoal - snapshot.todaySteps).coerceAtLeast(0L)
@@ -50,6 +58,9 @@ class DailyBriefingWorker(
             append("Balance ${ExecutiveAnalyticsEngine.formatMoney(profile.currencySymbol, snapshot.debitBalance)}")
             append(" · Steps ${snapshot.todaySteps}/${profile.dailyStepGoal}")
             if (remainingSteps > 0L) append(" ($remainingSteps to go)")
+            if (snapshot.todayEvents.isNotEmpty() || snapshot.pendingTasks.isNotEmpty()) {
+                append(" · ${snapshot.todayEvents.size} events, ${snapshot.pendingTasks.size} open tasks")
+            }
         }
         postNotification(
             title = "${profile.secretaryName} · Executive Check-In",
@@ -74,12 +85,12 @@ class DailyBriefingWorker(
             "Executive Briefings",
             NotificationManager.IMPORTANCE_DEFAULT
         ).apply {
-            description = "Scheduled financial, step, and mental health briefings"
+            description = "Scheduled financial and daily step briefings"
         }
         nm.createNotificationChannel(channel)
 
         val notif = NotificationCompat.Builder(applicationContext, channelId)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(body)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)

@@ -3,8 +3,6 @@ package com.personalsecretary.app.ui.screens
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,20 +13,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -36,57 +31,43 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryTabRow
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import com.personalsecretary.app.BuildConfig
-import com.personalsecretary.app.update.OtaUpdateState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.personalsecretary.app.BuildConfig
 import com.personalsecretary.app.data.ExecutiveSnapshot
-import com.personalsecretary.app.data.MentalCheckIn
 import com.personalsecretary.app.data.SecretaryProfile
 import com.personalsecretary.app.data.SecretaryVideoSlot
 import com.personalsecretary.app.health.StepPermissionStatus
 import com.personalsecretary.app.ui.components.ExecutiveCard
-import com.personalsecretary.app.ui.components.ProgressRing
 import com.personalsecretary.app.ui.components.SectionHeader
-import com.personalsecretary.app.ui.components.StepsWeekChart
 import com.personalsecretary.app.ui.theme.AccentGold
 import com.personalsecretary.app.ui.theme.CardBorder
 import com.personalsecretary.app.ui.theme.CardSurface
 import com.personalsecretary.app.ui.theme.CardSurfaceElevated
-import com.personalsecretary.app.ui.theme.CoralAccent
 import com.personalsecretary.app.ui.theme.EmeraldAccent
 import com.personalsecretary.app.ui.theme.ObsidianBg
-import com.personalsecretary.app.ui.theme.SkyAccent
 import com.personalsecretary.app.ui.theme.TextMuted
 import com.personalsecretary.app.ui.theme.TextPrimary
 import com.personalsecretary.app.ui.theme.TextSecondary
-import com.personalsecretary.app.ui.theme.VioletAccent
+import com.personalsecretary.app.update.OtaUpdateState
 import java.io.File
-import java.util.Locale
-import kotlin.math.roundToInt
 
 enum class HubSubTab(val label: String) {
-    PHYSICAL("Physical"),
-    MENTAL("Mental"),
+    STEPS("Health & Watch"),
     SETUP("Secretary Setup")
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HealthAndSetupScreen(
     selectedSubTab: HubSubTab,
@@ -94,7 +75,6 @@ fun HealthAndSetupScreen(
     snapshot: ExecutiveSnapshot,
     profile: SecretaryProfile,
     stepPermissions: StepPermissionStatus,
-    checkIns: List<MentalCheckIn>,
     videoSlots: Map<String, String>,
     detectedModelFiles: List<File>,
     engineStatusLabel: String,
@@ -109,8 +89,6 @@ fun HealthAndSetupScreen(
     onOpenHealthConnectSettings: () -> Unit,
     onSyncSteps: () -> Unit,
     onLogManualSteps: (Long) -> Unit,
-    onSaveCheckIn: (mood: Int, energy: Int, stress: Int, sleepHours: Float, tags: List<String>, note: String) -> Unit,
-    onDeleteCheckIn: (String) -> Unit,
     onSaveProfile: (SecretaryProfile) -> Unit,
     onSyncDayBook: () -> Unit,
     onImportCsvPicker: () -> Unit,
@@ -158,7 +136,7 @@ fun HealthAndSetupScreen(
         }
 
         when (selectedSubTab) {
-            HubSubTab.PHYSICAL -> PhysicalTabContent(
+            HubSubTab.STEPS -> SamsungStyleStepsTabContent(
                 snapshot = snapshot,
                 profile = profile,
                 stepPermissions = stepPermissions,
@@ -168,13 +146,6 @@ fun HealthAndSetupScreen(
                 onOpenHealthConnectSettings = onOpenHealthConnectSettings,
                 onSyncSteps = onSyncSteps,
                 onLogManualSteps = onLogManualSteps
-            )
-
-            HubSubTab.MENTAL -> MentalTabContent(
-                snapshot = snapshot,
-                checkIns = checkIns,
-                onSaveCheckIn = onSaveCheckIn,
-                onDeleteCheckIn = onDeleteCheckIn
             )
 
             HubSubTab.SETUP -> SecretarySetupTabContent(
@@ -199,339 +170,6 @@ fun HealthAndSetupScreen(
                 onCheckForUpdate = onCheckForUpdate,
                 onDownloadAndInstallUpdate = onDownloadAndInstallUpdate
             )
-        }
-    }
-}
-
-@Composable
-private fun PhysicalTabContent(
-    snapshot: ExecutiveSnapshot,
-    profile: SecretaryProfile,
-    stepPermissions: StepPermissionStatus,
-    onRequestHealthConnectPermissions: () -> Unit,
-    onRequestActivityRecognition: () -> Unit,
-    onOpenColorOsBatterySettings: () -> Unit,
-    onOpenHealthConnectSettings: () -> Unit,
-    onSyncSteps: () -> Unit,
-    onLogManualSteps: (Long) -> Unit
-) {
-    var manualStepsInput by remember { mutableStateOf("") }
-    val pct = if (profile.dailyStepGoal > 0) {
-        (snapshot.todaySteps.toFloat() / profile.dailyStepGoal.toFloat()).coerceIn(0f, 1f)
-    } else 0f
-    val pctLabel = when {
-        snapshot.todaySteps > 0L && (pct * 100).toInt() == 0 -> "<1%"
-        else -> "${(pct * 100).toInt()}%"
-    }
-    val hasPriorHistory = snapshot.recentSteps7d.dropLast(1).any { it.steps > 0L }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        item {
-            ExecutiveCard(borderColor = SkyAccent.copy(alpha = 0.45f)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("OnePlus 13 Steps Today", style = MaterialTheme.typography.labelMedium, color = TextMuted)
-                        Text(
-                            text = String.format(Locale.US, "%,d", snapshot.todaySteps),
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = SkyAccent,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "Goal: ${String.format(Locale.US, "%,d", profile.dailyStepGoal)} · 7d Avg: ${String.format(Locale.US, "%,d", snapshot.avgSteps7d)} · Streak: ${snapshot.stepStreakDays}d",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary
-                        )
-                        Text(
-                            text = "Source: ${snapshot.todayStepSource.name.replace('_', ' ')}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted
-                        )
-                    }
-                    ProgressRing(
-                        progress = if (snapshot.todaySteps > 0L) pct.coerceAtLeast(0.02f) else 0f,
-                        ringColor = if (pct >= 1f) EmeraldAccent else SkyAccent,
-                        size = 66.dp,
-                        strokeWidth = 6.dp,
-                        centerText = pctLabel
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = onSyncSteps,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Refresh Steps from Health Connect")
-                }
-            }
-        }
-
-        item {
-            ExecutiveCard {
-                SectionHeader(
-                    title = "7-Day Movement Trend",
-                    subtitle = if (hasPriorHistory) {
-                        "Gold line marks your ${profile.dailyStepGoal}-step daily target"
-                    } else {
-                        "Health Connect tracks continuously from the day access was granted"
-                    }
-                )
-                Spacer(Modifier.height(12.dp))
-                StepsWeekChart(records = snapshot.recentSteps7d, goal = profile.dailyStepGoal)
-                if (!hasPriorHistory) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "Tip: On ColorOS 17, past days stay 0 until a full day elapses or OHealth / Google Fit is linked in HC Data Sources.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextMuted
-                    )
-                }
-            }
-        }
-
-        item {
-            ExecutiveCard {
-                SectionHeader(
-                    title = "OnePlus 13 & ColorOS 17 Step Permissions",
-                    subtitle = stepPermissions.statusDetail
-                )
-                Spacer(Modifier.height(10.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PermissionStatusLine("Health Connect Read Steps", stepPermissions.healthConnectStepsGranted)
-                    PermissionStatusLine("Health Connect Background Read", stepPermissions.healthConnectBackgroundGranted)
-                    PermissionStatusLine("OP 13 Physical Activity Sensor", stepPermissions.activityRecognitionGranted)
-                    PermissionStatusLine("ColorOS 17 Battery Unrestricted", stepPermissions.batteryOptimizationIgnored)
-                }
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = onRequestHealthConnectPermissions,
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentGold, contentColor = ObsidianBg),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Authorize Health Connect", maxLines = 1)
-                    }
-                    OutlinedButton(
-                        onClick = onRequestActivityRecognition,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("OP 13 Sensor", maxLines = 1)
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = onOpenColorOsBatterySettings,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("ColorOS 17 Battery", maxLines = 1)
-                    }
-                    OutlinedButton(
-                        onClick = onOpenHealthConnectSettings,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("HC Data Sources", maxLines = 1)
-                    }
-                }
-            }
-        }
-
-        item {
-            ExecutiveCard {
-                SectionHeader(
-                    title = "Manual Step Entry",
-                    subtitle = "Optional override if you tracked a walk on another device"
-                )
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = manualStepsInput,
-                        onValueChange = { manualStepsInput = it.filter { ch -> ch.isDigit() } },
-                        label = { Text("Today's steps") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Button(
-                        onClick = {
-                            val v = manualStepsInput.toLongOrNull()
-                            if (v != null && v >= 0L) {
-                                onLogManualSteps(v)
-                                manualStepsInput = ""
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentGold, contentColor = ObsidianBg),
-                        shape = RoundedCornerShape(12.dp)
-                    ) { Text("Save") }
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun MentalTabContent(
-    snapshot: ExecutiveSnapshot,
-    checkIns: List<MentalCheckIn>,
-    onSaveCheckIn: (mood: Int, energy: Int, stress: Int, sleepHours: Float, tags: List<String>, note: String) -> Unit,
-    onDeleteCheckIn: (String) -> Unit
-) {
-    var mood by remember { mutableIntStateOf(3) }
-    var energy by remember { mutableIntStateOf(3) }
-    var stress by remember { mutableIntStateOf(3) }
-    var sleepHours by remember { mutableFloatStateOf(7.0f) }
-    var selectedTags by remember { mutableStateOf(setOf<String>()) }
-    var note by remember { mutableStateOf("") }
-
-    val availableTags = listOf("Work Load", "Finances", "Good Sleep", "Poor Sleep", "Walked", "Social", "Cravings", "Focused")
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        item {
-            ExecutiveCard(borderColor = VioletAccent.copy(alpha = 0.45f)) {
-                SectionHeader(
-                    title = "15-Second Executive Check-In",
-                    subtitle = "Private on-device log used by your secretary to spot stress & spending triggers"
-                )
-                Spacer(Modifier.height(12.dp))
-
-                RatingSliderRow("Mood", mood, 1..5, EmeraldAccent) { mood = it }
-                RatingSliderRow("Energy", energy, 1..5, SkyAccent) { energy = it }
-                RatingSliderRow("Stress", stress, 1..5, CoralAccent) { stress = it }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Sleep Last Night", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
-                    Text("${String.format(Locale.US, "%.1f", sleepHours)} hrs", style = MaterialTheme.typography.titleSmall, color = AccentGold)
-                }
-                Slider(
-                    value = sleepHours,
-                    onValueChange = { sleepHours = (it * 2f).roundToInt() / 2f },
-                    valueRange = 3f..11f,
-                    steps = 15
-                )
-
-                Text("Context Tags", style = MaterialTheme.typography.labelMedium, color = TextMuted)
-                Spacer(Modifier.height(6.dp))
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    availableTags.forEach { tag ->
-                        val active = tag in selectedTags
-                        FilterChip(
-                            selected = active,
-                            onClick = {
-                                selectedTags = if (active) selectedTags - tag else selectedTags + tag
-                            },
-                            label = { Text(tag, style = MaterialTheme.typography.labelSmall) }
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = note,
-                    onValueChange = { note = it },
-                    label = { Text("Brief reflection or what's on your mind") },
-                    maxLines = 3,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(12.dp))
-                Button(
-                    onClick = {
-                        onSaveCheckIn(mood, energy, stress, sleepHours, selectedTags.toList(), note.trim())
-                        note = ""
-                        selectedTags = emptySet()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentGold, contentColor = ObsidianBg),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Record Private Check-In")
-                }
-            }
-        }
-
-        if (snapshot.checkInCount14d > 0) {
-            item {
-                ExecutiveCard {
-                    SectionHeader(title = "7-Day Mental Baseline", subtitle = "${snapshot.checkInCount14d} check-ins in last 14 days")
-                    Spacer(Modifier.height(10.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        MiniMetric("Mood", "${String.format(Locale.US, "%.1f", snapshot.avgMood7d)}/5", EmeraldAccent)
-                        MiniMetric("Energy", "${String.format(Locale.US, "%.1f", snapshot.avgEnergy7d)}/5", SkyAccent)
-                        MiniMetric("Stress", "${String.format(Locale.US, "%.1f", snapshot.avgStress7d)}/5", CoralAccent)
-                        MiniMetric("Sleep", "${String.format(Locale.US, "%.1f", snapshot.avgSleep7d)}h", AccentGold)
-                    }
-                }
-            }
-        }
-
-        item {
-            SectionHeader(title = "Recent Check-Ins", subtitle = "Stored strictly on-device, excluded from backup")
-        }
-
-        if (checkIns.isEmpty()) {
-            item {
-                ExecutiveCard {
-                    Text("No check-ins recorded yet.", style = MaterialTheme.typography.bodySmall, color = TextMuted)
-                }
-            }
-        } else {
-            items(checkIns.take(20), key = { it.id }) { item ->
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = CardSurfaceElevated,
-                    border = BorderStroke(1.dp, CardBorder),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.Top,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text(
-                                text = "${item.dateIso} · Mood ${item.mood}/5 · Energy ${item.energy}/5 · Stress ${item.stress}/5 · ${item.sleepHours}h",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = AccentGold
-                            )
-                            if (item.tags.isNotEmpty()) {
-                                Text(item.tags.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = SkyAccent)
-                            }
-                            if (item.note.isNotBlank()) {
-                                Text(item.note, style = MaterialTheme.typography.bodySmall, color = TextPrimary)
-                            }
-                        }
-                        IconButton(onClick = { onDeleteCheckIn(item.id) }, modifier = Modifier.size(30.dp)) {
-                            Icon(Icons.Default.Delete, contentDescription = "Delete check-in", tint = TextMuted, modifier = Modifier.size(16.dp))
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -608,7 +246,7 @@ private fun SecretarySetupTabContent(
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
                         ) {
-                            Text("${file.name} (${sizeMb} MB)", maxLines = 1)
+                            Text("${file.name} ($sizeMb MB)", maxLines = 1)
                         }
                     }
                 }
@@ -763,7 +401,7 @@ private fun SecretarySetupTabContent(
             ExecutiveCard {
                 SectionHeader(
                     title = "Day Book Google Sheets Sync",
-                    subtitle = "Compatible with your DayBookTracker Apps Script URL or direct CSV/TSV import"
+                    subtitle = "Compatible with your DayBookTracker Apps Script URL or direct CSV/TSV/JSON import"
                 )
                 Spacer(Modifier.height(10.dp))
                 OutlinedTextField(
@@ -808,7 +446,7 @@ private fun SecretarySetupTabContent(
                     ) {
                         Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Import CSV/TSV")
+                        Text("Import File")
                     }
                 }
             }
@@ -819,7 +457,7 @@ private fun SecretarySetupTabContent(
             ExecutiveCard {
                 SectionHeader(
                     title = "Client Dossier & Consultant Targets",
-                    subtitle = "Feed your goals and personal context directly to your secretary"
+                    subtitle = "Feed your financial and activity goals directly to your secretary"
                 )
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -867,7 +505,7 @@ private fun SecretarySetupTabContent(
                 OutlinedTextField(
                     value = healthGoals,
                     onValueChange = { healthGoals = it },
-                    label = { Text("Physical & Mental Priorities") },
+                    label = { Text("Physical Activity Priorities") },
                     maxLines = 3,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1043,52 +681,5 @@ private fun SecretarySetupTabContent(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun PermissionStatusLine(label: String, granted: Boolean) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-        Text(
-            text = if (granted) "Granted" else "Pending",
-            style = MaterialTheme.typography.labelSmall,
-            color = if (granted) EmeraldAccent else CoralAccent,
-            fontWeight = FontWeight.SemiBold
-        )
-    }
-}
-
-@Composable
-private fun RatingSliderRow(
-    label: String,
-    value: Int,
-    range: IntRange,
-    accent: androidx.compose.ui.graphics.Color,
-    onChange: (Int) -> Unit
-) {
-    Column {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(label, style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
-            Text("$value / ${range.last}", style = MaterialTheme.typography.titleSmall, color = accent, fontWeight = FontWeight.SemiBold)
-        }
-        Slider(
-            value = value.toFloat(),
-            onValueChange = { onChange(it.roundToInt().coerceIn(range.first, range.last)) },
-            valueRange = range.first.toFloat()..range.last.toFloat(),
-            steps = (range.last - range.first) - 1
-        )
-    }
-}
-
-@Composable
-private fun MiniMetric(label: String, value: String, color: androidx.compose.ui.graphics.Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, style = MaterialTheme.typography.titleMedium, color = color, fontWeight = FontWeight.Bold)
-        Text(label, style = MaterialTheme.typography.labelSmall, color = TextMuted)
     }
 }

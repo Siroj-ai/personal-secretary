@@ -19,7 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.EventNote
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Wallet
@@ -32,6 +32,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -47,6 +48,7 @@ import com.personalsecretary.app.ui.components.ExecutiveCard
 import com.personalsecretary.app.ui.components.InsightCard
 import com.personalsecretary.app.ui.components.ProgressRing
 import com.personalsecretary.app.ui.components.SectionHeader
+import com.personalsecretary.app.ui.components.formatExecutiveMarkdown
 import com.personalsecretary.app.ui.theme.AccentGold
 import com.personalsecretary.app.ui.theme.CardBorder
 import com.personalsecretary.app.ui.theme.CardSurfaceElevated
@@ -77,9 +79,9 @@ fun BriefingScreen(
     onRefreshAll: () -> Unit,
     onToggleMute: () -> Unit,
     onOpenAdvisor: (String?) -> Unit,
+    onOpenSchedule: () -> Unit,
     onOpenFinances: () -> Unit,
-    onOpenPhysical: () -> Unit,
-    onOpenMental: () -> Unit
+    onOpenPhysical: () -> Unit
 ) {
     val cur = profile.currencySymbol
     val hour = LocalTime.now().hour
@@ -114,7 +116,7 @@ fun BriefingScreen(
                         color = TextPrimary
                     )
                     Text(
-                        text = "Executive Financial, Physical & Mental Desk",
+                        text = "Executive Finances · Schedule · Health",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted
                     )
@@ -208,42 +210,44 @@ fun BriefingScreen(
                     onClick = onOpenFinances
                 )
 
+                PillarPulseRow(
+                    icon = Icons.Default.EventNote,
+                    iconTint = AccentGold,
+                    title = "Schedule & Work",
+                    headline = "${snapshot.todayEvents.size} event${if (snapshot.todayEvents.size == 1) "" else "s"} · ${snapshot.pendingTasks.size} open",
+                    subtitle = when {
+                        snapshot.overdueTasksCount > 0 -> "${snapshot.overdueTasksCount} overdue item${if (snapshot.overdueTasksCount == 1) "" else "s"} awaiting review"
+                        snapshot.todayEvents.isNotEmpty() -> "Next: ${snapshot.todayEvents.first().title} (${ExecutiveAnalyticsEngine.formatEventTimeRange(snapshot.todayEvents.first())})"
+                        snapshot.pendingTasks.isNotEmpty() -> "Top task: ${snapshot.pendingTasks.first().title}"
+                        else -> "Connect phone calendar or add work reminders"
+                    },
+                    ringProgress = when {
+                        snapshot.overdueTasksCount > 0 -> 1f
+                        snapshot.pendingTasks.isEmpty() && snapshot.todayEvents.isEmpty() -> 0f
+                        else -> 0.65f
+                    },
+                    ringColor = if (snapshot.overdueTasksCount > 0) CoralAccent else AccentGold,
+                    ringLabel = if (snapshot.overdueTasksCount > 0) "${snapshot.overdueTasksCount}!" else "${snapshot.todayEvents.size + snapshot.dueTodayTasksCount}",
+                    onClick = onOpenSchedule
+                )
+
                 val stepRingLabel = when {
                     snapshot.todaySteps > 0L && (stepProgress * 100).toInt() == 0 -> "<1%"
                     else -> "${(stepProgress * 100).toInt()}%"
                 }
+                val watchExtra = if (snapshot.healthVitals.lastNightSleepMinutes > 0) {
+                    " · Sleep ${ExecutiveAnalyticsEngine.formatDurationHoursMins(snapshot.healthVitals.lastNightSleepMinutes)}"
+                } else ""
                 PillarPulseRow(
                     icon = Icons.AutoMirrored.Filled.DirectionsWalk,
-                    iconTint = SkyAccent,
-                    title = "Physical Activity (OP 13)",
+                    iconTint = EmeraldAccent,
+                    title = "Health & Watch (OP 13)",
                     headline = "${String.format(Locale.US, "%,d", snapshot.todaySteps)} steps",
-                    subtitle = "Goal ${String.format(Locale.US, "%,d", profile.dailyStepGoal)} · 7d avg ${String.format(Locale.US, "%,d", snapshot.avgSteps7d)} · ${snapshot.stepStreakDays}d streak",
+                    subtitle = "${String.format(Locale.US, "%.2f", snapshot.todayMetrics.distanceKm)} km · ${snapshot.todayMetrics.caloriesKcal} kcal · Goal ${String.format(Locale.US, "%,d", profile.dailyStepGoal)}$watchExtra",
                     ringProgress = if (snapshot.todaySteps > 0L) stepProgress.coerceAtLeast(0.02f) else 0f,
                     ringColor = if (stepProgress >= 1f) EmeraldAccent else SkyAccent,
                     ringLabel = stepRingLabel,
                     onClick = onOpenPhysical
-                )
-
-                val latest = snapshot.latestCheckIn
-                val mentalScore = if (latest != null) ((latest.mood + latest.energy + (6 - latest.stress)) / 15f) else 0f
-                PillarPulseRow(
-                    icon = Icons.Default.Psychology,
-                    iconTint = VioletAccent,
-                    title = "Mental Bandwidth",
-                    headline = if (latest != null) {
-                        "Mood ${latest.mood}/5 · Stress ${latest.stress}/5"
-                    } else {
-                        "No check-in today"
-                    },
-                    subtitle = if (latest != null) {
-                        "Energy ${latest.energy}/5 · Sleep ${latest.sleepHours}h · Last ${latest.dateIso}"
-                    } else {
-                        "Tap to record a 15-second executive mood & stress check-in"
-                    },
-                    ringProgress = mentalScore,
-                    ringColor = if (latest != null && latest.stress >= 4) CoralAccent else VioletAccent,
-                    ringLabel = if (latest != null) "${latest.mood}/5" else "--",
-                    onClick = onOpenMental
                 )
             }
         }
@@ -284,24 +288,32 @@ fun BriefingScreen(
                     }
                 }
                 Spacer(Modifier.height(10.dp))
+                val resolvedBriefing = briefingText.ifBlank {
+                    ExecutiveAnalyticsEngine.buildDeterministicBriefing(snapshot, profile)
+                }
+                val formattedBriefing = remember(resolvedBriefing) {
+                    formatExecutiveMarkdown(
+                        raw = resolvedBriefing,
+                        boldColor = TextPrimary,
+                        headingColor = AccentGold
+                    )
+                }
                 Text(
-                    text = briefingText.ifBlank {
-                        ExecutiveAnalyticsEngine.buildDeterministicBriefing(snapshot, profile)
-                    },
+                    text = formattedBriefing,
                     style = MaterialTheme.typography.bodyMedium,
                     color = TextSecondary
                 )
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
-                        onClick = { onOpenAdvisor("Give me a concise financial and health action plan for the next 48 hours.") },
+                        onClick = { onOpenAdvisor("Give me a concise action plan across my schedule, work tasks, finances, and health for the next 48 hours.") },
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("48h Action Plan", maxLines = 1)
                     }
                     OutlinedButton(
-                        onClick = { onOpenAdvisor("Audit my spending leaks and check how my steps and stress look.") },
+                        onClick = { onOpenAdvisor("Brief my schedule today, pending work, spending status, and steps.") },
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.weight(1f)
                     ) {
@@ -311,12 +323,12 @@ fun BriefingScreen(
             }
         }
 
-        // Priority Alerts & Cross-Domain Insights
+        // Priority Alerts & Insights
         if (snapshot.insights.isNotEmpty()) {
             item {
                 SectionHeader(
-                    title = "Priority Alerts & Correlations",
-                    subtitle = "Computed locally across finances, steps, and check-ins"
+                    title = "Priority Alerts & Insights",
+                    subtitle = "Computed locally across finances and daily steps"
                 )
             }
             items(snapshot.insights, key = { it.id }) { insight ->
