@@ -167,6 +167,9 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
             }
             recomputeSnapshot()
             refreshPermissionsAndSteps()
+            if (resolvedProfile.autoLoadModelOnStart && resolvedProfile.modelPath.isNotBlank() && File(resolvedProfile.modelPath).exists()) {
+                loadGemmaModel()
+            }
             if (resolvedProfile.autoCheckUpdates && resolvedProfile.githubRepo.contains("/")) {
                 checkForOtaUpdate(silent = true)
             }

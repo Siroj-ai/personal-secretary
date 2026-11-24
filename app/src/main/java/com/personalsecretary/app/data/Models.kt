@@ -147,6 +147,7 @@ data class SecretaryProfile(
     val appsScriptUrl: String = "",
     val modelPath: String = "",
     val preferGpuBackend: Boolean = true,
+    val autoLoadModelOnStart: Boolean = true,
     val voiceBriefingEnabled: Boolean = false,
     val showVideoPresence: Boolean = true,
     val videoMuted: Boolean = true,

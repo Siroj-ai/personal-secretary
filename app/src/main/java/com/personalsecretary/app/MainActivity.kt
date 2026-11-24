@@ -2,9 +2,11 @@ package com.personalsecretary.app
 
 import android.Manifest
 import android.content.ComponentCallbacks2
+import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -60,7 +62,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(AndroidColor.parseColor("#0B0F17"))
+        )
 
         setContent {
             PersonalSecretaryTheme {
@@ -95,7 +100,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE) {
             viewModel.onMemoryPressure()
         }
     }

@@ -86,6 +86,16 @@ jobs:
           echo "${SHA}  ${APK_OUT}" > "${APK_OUT}.sha256"
           echo "apk=${APK_OUT}" >> "$GITHUB_OUTPUT"
           echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          {
+            echo "notes<<EOF"
+            if [ -n "${{ inputs.notes }}" ]; then
+              echo "${{ inputs.notes }}"
+            else
+              echo "$COMMIT_MSG"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release for OTA
         uses: softprops/action-gh-release@v2
@@ -93,7 +103,7 @@ jobs:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: Personal Secretary ${{ steps.ver.outputs.tag }}
           body: |
-            ${{ inputs.notes || 'Personal Secretary signed OTA release.' }}
+            ${{ steps.pkg.outputs.notes }}
 
             **OTA Verification**
             - Version: `${{ steps.ver.outputs.version }}`

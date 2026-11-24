@@ -612,6 +612,22 @@ private fun SecretarySetupTabContent(
                     )
                 }
 
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Auto-load Gemma 4 on startup", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                        Text("Keeps your advisor warm across app switches", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                    }
+                    Switch(
+                        checked = profile.autoLoadModelOnStart,
+                        onCheckedChange = { onSaveProfile(profile.copy(autoLoadModelOnStart = it)) }
+                    )
+                }
+
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
@@ -621,7 +637,7 @@ private fun SecretarySetupTabContent(
                     ) {
                         Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Pick .litertlm", maxLines = 1)
+                        Text("Pick Model", maxLines = 1)
                     }
                     OutlinedButton(
                         onClick = onScanModels,
@@ -699,7 +715,7 @@ private fun SecretarySetupTabContent(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(slot.title, style = MaterialTheme.typography.titleSmall, color = TextPrimary)
                                     Text(
-                                        text = if (exists && assigned != null) "Assigned (${File(assigned).length() / 1024} KB)" else slot.subtitle,
+                                        text = if (assigned != null && exists) "Assigned (${File(assigned).length() / 1024} KB)" else slot.subtitle,
                                         style = MaterialTheme.typography.bodySmall,
                                         color = if (exists) EmeraldAccent else TextMuted
                                     )
