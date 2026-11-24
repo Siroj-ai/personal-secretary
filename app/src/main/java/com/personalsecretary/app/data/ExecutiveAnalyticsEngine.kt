@@ -265,7 +265,7 @@ object ExecutiveAnalyticsEngine {
                 severity = InsightSeverity.INFO,
                 title = "Connect OnePlus 13 Steps",
                 detail = "Grant Health Connect or Activity Recognition permission so your secretary can monitor daily movement automatically.",
-                recommendation = "Open Health & Setup -> Physical to authorize Health Connect and enable OxygenOS background activity."
+                recommendation = "Open Health & Desk -> Physical to authorize Health Connect and enable ColorOS 17 background activity."
             )
         } else if (stepPct >= 100) {
             list += ExecutiveInsight(

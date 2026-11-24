@@ -105,7 +105,7 @@ fun HealthAndSetupScreen(
     statusToast: String?,
     onRequestHealthConnectPermissions: () -> Unit,
     onRequestActivityRecognition: () -> Unit,
-    onOpenOxygenOsBatterySettings: () -> Unit,
+    onOpenColorOsBatterySettings: () -> Unit,
     onOpenHealthConnectSettings: () -> Unit,
     onSyncSteps: () -> Unit,
     onLogManualSteps: (Long) -> Unit,
@@ -164,7 +164,7 @@ fun HealthAndSetupScreen(
                 stepPermissions = stepPermissions,
                 onRequestHealthConnectPermissions = onRequestHealthConnectPermissions,
                 onRequestActivityRecognition = onRequestActivityRecognition,
-                onOpenOxygenOsBatterySettings = onOpenOxygenOsBatterySettings,
+                onOpenColorOsBatterySettings = onOpenColorOsBatterySettings,
                 onOpenHealthConnectSettings = onOpenHealthConnectSettings,
                 onSyncSteps = onSyncSteps,
                 onLogManualSteps = onLogManualSteps
@@ -210,7 +210,7 @@ private fun PhysicalTabContent(
     stepPermissions: StepPermissionStatus,
     onRequestHealthConnectPermissions: () -> Unit,
     onRequestActivityRecognition: () -> Unit,
-    onOpenOxygenOsBatterySettings: () -> Unit,
+    onOpenColorOsBatterySettings: () -> Unit,
     onOpenHealthConnectSettings: () -> Unit,
     onSyncSteps: () -> Unit,
     onLogManualSteps: (Long) -> Unit
@@ -219,6 +219,11 @@ private fun PhysicalTabContent(
     val pct = if (profile.dailyStepGoal > 0) {
         (snapshot.todaySteps.toFloat() / profile.dailyStepGoal.toFloat()).coerceIn(0f, 1f)
     } else 0f
+    val pctLabel = when {
+        snapshot.todaySteps > 0L && (pct * 100).toInt() == 0 -> "<1%"
+        else -> "${(pct * 100).toInt()}%"
+    }
+    val hasPriorHistory = snapshot.recentSteps7d.dropLast(1).any { it.steps > 0L }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -252,11 +257,11 @@ private fun PhysicalTabContent(
                         )
                     }
                     ProgressRing(
-                        progress = pct,
+                        progress = if (snapshot.todaySteps > 0L) pct.coerceAtLeast(0.02f) else 0f,
                         ringColor = if (pct >= 1f) EmeraldAccent else SkyAccent,
                         size = 66.dp,
                         strokeWidth = 6.dp,
-                        centerText = "${(pct * 100).toInt()}%"
+                        centerText = pctLabel
                     )
                 }
                 Spacer(Modifier.height(12.dp))
@@ -276,17 +281,29 @@ private fun PhysicalTabContent(
             ExecutiveCard {
                 SectionHeader(
                     title = "7-Day Movement Trend",
-                    subtitle = "Gold line marks your ${profile.dailyStepGoal}-step daily target"
+                    subtitle = if (hasPriorHistory) {
+                        "Gold line marks your ${profile.dailyStepGoal}-step daily target"
+                    } else {
+                        "Health Connect tracks continuously from the day access was granted"
+                    }
                 )
                 Spacer(Modifier.height(12.dp))
                 StepsWeekChart(records = snapshot.recentSteps7d, goal = profile.dailyStepGoal)
+                if (!hasPriorHistory) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Tip: On ColorOS 17, past days stay 0 until a full day elapses or OHealth / Google Fit is linked in HC Data Sources.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted
+                    )
+                }
             }
         }
 
         item {
             ExecutiveCard {
                 SectionHeader(
-                    title = "OnePlus 13 & OxygenOS Step Permissions",
+                    title = "OnePlus 13 & ColorOS 17 Step Permissions",
                     subtitle = stepPermissions.statusDetail
                 )
                 Spacer(Modifier.height(10.dp))
@@ -294,7 +311,7 @@ private fun PhysicalTabContent(
                     PermissionStatusLine("Health Connect Read Steps", stepPermissions.healthConnectStepsGranted)
                     PermissionStatusLine("Health Connect Background Read", stepPermissions.healthConnectBackgroundGranted)
                     PermissionStatusLine("OP 13 Physical Activity Sensor", stepPermissions.activityRecognitionGranted)
-                    PermissionStatusLine("OxygenOS Battery Unrestricted", stepPermissions.batteryOptimizationIgnored)
+                    PermissionStatusLine("ColorOS 17 Battery Unrestricted", stepPermissions.batteryOptimizationIgnored)
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -317,11 +334,11 @@ private fun PhysicalTabContent(
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
-                        onClick = onOpenOxygenOsBatterySettings,
+                        onClick = onOpenColorOsBatterySettings,
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("OxygenOS Battery", maxLines = 1)
+                        Text("ColorOS 17 Battery", maxLines = 1)
                     }
                     OutlinedButton(
                         onClick = onOpenHealthConnectSettings,

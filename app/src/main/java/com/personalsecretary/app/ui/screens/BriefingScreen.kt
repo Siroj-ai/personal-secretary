@@ -208,15 +208,19 @@ fun BriefingScreen(
                     onClick = onOpenFinances
                 )
 
+                val stepRingLabel = when {
+                    snapshot.todaySteps > 0L && (stepProgress * 100).toInt() == 0 -> "<1%"
+                    else -> "${(stepProgress * 100).toInt()}%"
+                }
                 PillarPulseRow(
                     icon = Icons.AutoMirrored.Filled.DirectionsWalk,
                     iconTint = SkyAccent,
                     title = "Physical Activity (OP 13)",
                     headline = "${String.format(Locale.US, "%,d", snapshot.todaySteps)} steps",
                     subtitle = "Goal ${String.format(Locale.US, "%,d", profile.dailyStepGoal)} · 7d avg ${String.format(Locale.US, "%,d", snapshot.avgSteps7d)} · ${snapshot.stepStreakDays}d streak",
-                    ringProgress = stepProgress,
+                    ringProgress = if (snapshot.todaySteps > 0L) stepProgress.coerceAtLeast(0.02f) else 0f,
                     ringColor = if (stepProgress >= 1f) EmeraldAccent else SkyAccent,
-                    ringLabel = "${(stepProgress * 100).toInt()}%",
+                    ringLabel = stepRingLabel,
                     onClick = onOpenPhysical
                 )
 

@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.StepsRecord
+import androidx.health.connect.client.request.AggregateGroupByPeriodRequest
 import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import com.personalsecretary.app.data.DailyStepRecord
@@ -29,6 +30,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.Period
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
@@ -58,6 +61,8 @@ class OnePlusStepTracker(
     private val _liveHardwareStepsToday = MutableStateFlow<Long?>(null)
     val liveHardwareStepsToday: StateFlow<Long?> = _liveHardwareStepsToday.asStateFlow()
 
+    @Volatile
+    private var lastCumulativeSensorValue: Long? = null
     private var sensorRegistered = false
 
     val healthConnectReadPermissions: Set<String> = buildSet {
@@ -150,33 +155,47 @@ class OnePlusStepTracker(
     override fun onSensorChanged(event: SensorEvent?) {
         if (event == null || event.sensor.type != Sensor.TYPE_STEP_COUNTER) return
         val cumulativeSinceBoot = event.values.firstOrNull()?.toLong() ?: return
+        lastCumulativeSensorValue = cumulativeSinceBoot
         val todayIso = LocalDate.now().format(isoFmt)
 
         scope.launch(Dispatchers.IO) {
+            val existingToday = database.loadStepRecords(limitDays = 7).firstOrNull { it.dateIso == todayIso }
             val savedDate = database.getStringValue(KEY_SENSOR_DATE)
             val savedBaseline = database.getStringValue(KEY_SENSOR_BASELINE)?.toLongOrNull()
 
+            // Anchor hardware baseline cleanly against any higher Health Connect / stored count for today
+            val storedStepsToday = existingToday?.steps ?: 0L
             val baseline = if (savedDate == todayIso && savedBaseline != null && cumulativeSinceBoot >= savedBaseline) {
-                savedBaseline
+                val rawDelta = cumulativeSinceBoot - savedBaseline
+                if (storedStepsToday > rawDelta) {
+                    val reanchored = (cumulativeSinceBoot - storedStepsToday).coerceAtLeast(0L)
+                    database.putStringValue(KEY_SENSOR_BASELINE, reanchored.toString())
+                    reanchored
+                } else {
+                    savedBaseline
+                }
             } else {
-                // New day or phone rebooted: anchor baseline so today's live delta begins accurately
+                val initialBaseline = (cumulativeSinceBoot - storedStepsToday).coerceAtLeast(0L)
                 database.putStringValue(KEY_SENSOR_DATE, todayIso)
-                database.putStringValue(KEY_SENSOR_BASELINE, cumulativeSinceBoot.toString())
-                cumulativeSinceBoot
+                database.putStringValue(KEY_SENSOR_BASELINE, initialBaseline.toString())
+                initialBaseline
             }
 
-            val deltaSteps = (cumulativeSinceBoot - baseline).coerceAtLeast(0L)
-            _liveHardwareStepsToday.value = deltaSteps
+            val liveTodaySteps = (cumulativeSinceBoot - baseline).coerceAtLeast(storedStepsToday)
+            _liveHardwareStepsToday.value = liveTodaySteps
 
-            // Only overwrite today's DB row if hardware sensor has a higher count than stored value
-            val existingToday = database.loadStepRecords(limitDays = 7).firstOrNull { it.dateIso == todayIso }
-            if (existingToday == null || deltaSteps > existingToday.steps) {
+            if (existingToday == null || liveTodaySteps > existingToday.steps) {
+                val source = if (existingToday?.source == StepSource.HEALTH_CONNECT) {
+                    StepSource.HEALTH_CONNECT
+                } else {
+                    StepSource.HARDWARE_SENSOR
+                }
                 database.upsertStepRecords(
                     listOf(
                         DailyStepRecord(
                             dateIso = todayIso,
-                            steps = deltaSteps,
-                            source = StepSource.HARDWARE_SENSOR,
+                            steps = liveTodaySteps,
+                            source = source,
                             updatedAtMillis = System.currentTimeMillis()
                         )
                     )
@@ -188,8 +207,8 @@ class OnePlusStepTracker(
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
     /**
-     * Reads daily aggregated steps for the last [days] days from Android Health Connect.
-     * Uses aggregate() to avoid double-counting across OnePlus OHealth, phone sensors, and wearables.
+     * Reads daily aggregated steps for the last [days] days from Android Health Connect
+     * using AggregateGroupByPeriodRequest (local time, single IPC call) with per-day fallback.
      */
     suspend fun syncStepsFromHealthConnect(days: Int = 14): Result<List<DailyStepRecord>> =
         withContext(Dispatchers.IO) {
@@ -203,30 +222,78 @@ class OnePlusStepTracker(
 
                 val zone = ZoneId.systemDefault()
                 val today = LocalDate.now(zone)
-                val nowInstant = java.time.Instant.now()
-                val records = mutableListOf<DailyStepRecord>()
+                val todayIso = today.format(isoFmt)
+                val startDay = today.minusDays((days - 1).toLong())
+                val nowLocal = LocalDateTime.now(zone)
+                val existingByDate = database.loadStepRecords(limitDays = days + 7).associateBy { it.dateIso }
 
-                for (offset in (days - 1) downTo 0) {
-                    val day = today.minusDays(offset.toLong())
-                    val startInstant = day.atStartOfDay(zone).toInstant()
-                    val endInstant = if (offset == 0) nowInstant else day.plusDays(1).atStartOfDay(zone).toInstant()
-                    if (!endInstant.isAfter(startInstant)) continue
+                val hcTotalsByDate = mutableMapOf<String, Long>()
 
-                    val req = AggregateRequest(
+                // Preferred single-call local-time daily bucket aggregation
+                val groupedResult = runCatching {
+                    val req = AggregateGroupByPeriodRequest(
                         metrics = setOf(StepsRecord.COUNT_TOTAL),
-                        timeRangeFilter = TimeRangeFilter.between(startInstant, endInstant)
+                        timeRangeFilter = TimeRangeFilter.between(startDay.atStartOfDay(), nowLocal),
+                        timeRangeSlicer = Period.ofDays(1)
                     )
-                    val resp = client.aggregate(req)
-                    val total = resp[StepsRecord.COUNT_TOTAL] ?: 0L
-                    val iso = day.format(isoFmt)
+                    client.aggregateGroupByPeriod(req)
+                }
+
+                if (groupedResult.isSuccess) {
+                    for (bucket in groupedResult.getOrDefault(emptyList())) {
+                        val dayIso = bucket.startTime.toLocalDate().format(isoFmt)
+                        val count = bucket.result[StepsRecord.COUNT_TOTAL] ?: 0L
+                        hcTotalsByDate[dayIso] = maxOf(hcTotalsByDate[dayIso] ?: 0L, count)
+                    }
+                } else {
+                    // Fallback to per-day Instant aggregation if OEM provider rejects period grouping
+                    val nowInstant = java.time.Instant.now()
+                    for (offset in (days - 1) downTo 0) {
+                        val day = today.minusDays(offset.toLong())
+                        val startInstant = day.atStartOfDay(zone).toInstant()
+                        val endInstant = if (offset == 0) nowInstant else day.plusDays(1).atStartOfDay(zone).toInstant()
+                        if (!endInstant.isAfter(startInstant)) continue
+                        val req = AggregateRequest(
+                            metrics = setOf(StepsRecord.COUNT_TOTAL),
+                            timeRangeFilter = TimeRangeFilter.between(startInstant, endInstant)
+                        )
+                        val resp = client.aggregate(req)
+                        hcTotalsByDate[day.format(isoFmt)] = resp[StepsRecord.COUNT_TOTAL] ?: 0L
+                    }
+                }
+
+                val records = mutableListOf<DailyStepRecord>()
+                for (offset in (days - 1) downTo 0) {
+                    val iso = today.minusDays(offset.toLong()).format(isoFmt)
+                    val hcSteps = hcTotalsByDate[iso] ?: 0L
+                    val existing = existingByDate[iso]
+
                     val mergedSteps = if (offset == 0) {
-                        maxOf(total, _liveHardwareStepsToday.value ?: 0L)
-                    } else total
+                        val live = _liveHardwareStepsToday.value ?: 0L
+                        val best = maxOf(hcSteps, live, existing?.steps ?: 0L)
+                        // Re-anchor hardware baseline if Health Connect jumped ahead of live hardware delta
+                        val latestCum = lastCumulativeSensorValue
+                        if (latestCum != null && hcSteps > live) {
+                            database.putStringValue(KEY_SENSOR_DATE, todayIso)
+                            database.putStringValue(KEY_SENSOR_BASELINE, (latestCum - best).coerceAtLeast(0L).toString())
+                            _liveHardwareStepsToday.value = best
+                        }
+                        best
+                    } else {
+                        if (existing?.source == StepSource.MANUAL) maxOf(hcSteps, existing.steps) else hcSteps
+                    }
+
+                    val source = when {
+                        hcSteps > 0L -> StepSource.HEALTH_CONNECT
+                        existing?.source == StepSource.MANUAL && mergedSteps > 0L -> StepSource.MANUAL
+                        mergedSteps > 0L -> StepSource.HARDWARE_SENSOR
+                        else -> StepSource.HEALTH_CONNECT
+                    }
 
                     records += DailyStepRecord(
                         dateIso = iso,
                         steps = mergedSteps,
-                        source = StepSource.HEALTH_CONNECT,
+                        source = source,
                         updatedAtMillis = System.currentTimeMillis()
                     )
                 }

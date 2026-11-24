@@ -263,9 +263,34 @@ fun StepsWeekChart(
     modifier: Modifier = Modifier
 ) {
     if (records.isEmpty()) return
-    val maxSteps = maxOf(records.maxOf { it.steps }, goal.toLong(), 1000L).toFloat()
+    val highestDay = records.maxOf { it.steps }
+    val showGoalLine = highestDay >= (goal * 0.25).toLong()
+    val maxSteps = if (showGoalLine) {
+        maxOf(highestDay, goal.toLong(), 1000L).toFloat()
+    } else {
+        maxOf((highestDay * 1.45).toLong(), 200L).toFloat()
+    }
 
     Column(modifier = modifier.fillMaxWidth()) {
+        // Step value labels above each bar so even small counts (e.g. 66) are clearly legible
+        Row(modifier = Modifier.fillMaxWidth()) {
+            records.forEach { rec ->
+                val label = when {
+                    rec.steps <= 0L -> ""
+                    rec.steps >= 1000L -> String.format(java.util.Locale.US, "%.1fk", rec.steps / 1000.0)
+                    else -> rec.steps.toString()
+                }
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (rec.steps >= goal) EmeraldAccent else SkyAccent,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
@@ -275,19 +300,28 @@ fun StepsWeekChart(
             val barW = (colW * 0.45f).coerceAtMost(34f)
             val h = size.height - 6f
 
-            // Goal reference line
-            val goalY = h - ((goal / maxSteps) * h)
-            drawLine(
-                color = AccentGold.copy(alpha = 0.55f),
-                start = Offset(0f, goalY),
-                end = Offset(size.width, goalY),
-                strokeWidth = 2f
-            )
+            if (showGoalLine) {
+                val goalY = h - ((goal / maxSteps) * h)
+                drawLine(
+                    color = AccentGold.copy(alpha = 0.55f),
+                    start = Offset(0f, goalY),
+                    end = Offset(size.width, goalY),
+                    strokeWidth = 2f
+                )
+            }
 
             records.forEachIndexed { idx, rec ->
-                val barH = ((rec.steps / maxSteps) * h).coerceAtLeast(if (rec.steps > 0) 6f else 2f)
+                val barH = if (rec.steps > 0L) {
+                    ((rec.steps / maxSteps) * h).coerceAtLeast(12f)
+                } else {
+                    3f
+                }
                 val x = colW * idx + (colW - barW) / 2f
-                val color = if (rec.steps >= goal) EmeraldAccent else SkyAccent
+                val color = when {
+                    rec.steps >= goal -> EmeraldAccent
+                    rec.steps > 0L -> SkyAccent
+                    else -> CardBorder
+                }
                 drawRoundRect(
                     color = color,
                     topLeft = Offset(x, h - barH),
@@ -307,6 +341,14 @@ fun StepsWeekChart(
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
             }
+        }
+        if (!showGoalLine) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Auto-scaled for visibility · Daily target: ${String.format(java.util.Locale.US, "%,d", goal)} steps",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted
+            )
         }
     }
 }

@@ -35,4 +35,4 @@ You can also trigger a release manually in GitHub under **Actions -> Release Sig
    - Confirm `GitHub Repository` is `Siroj-ai/personal-secretary`.
    - If your repo is **Private**, paste a read-only fine-grained GitHub PAT (`Repository permissions -> Contents: Read-only`). Leave blank if **Public**.
    - Tap **Check for Updates**.
-3. On the first OTA update, OxygenOS will prompt once to toggle **Allow from this source** for Personal Secretary — after that, updates download, verify SHA-256, and upgrade in-place while keeping your SQLite database, Day Book cache, Google Flow videos, and `gemma-4-E4B-it.litertlm` intact.
+3. On the first OTA update, ColorOS 17 will prompt once to toggle **Allow from this source** for Personal Secretary — after that, updates download, verify SHA-256, and upgrade in-place while keeping your SQLite database, Day Book cache, Google Flow videos, and `gemma-4-E4B-it.litertlm` intact.

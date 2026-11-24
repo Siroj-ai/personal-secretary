@@ -288,7 +288,7 @@ private fun PersonalSecretaryAppRoot(
                         }.toTypedArray()
                         if (perms.isNotEmpty()) activityRecognitionLauncher.launch(perms)
                     },
-                    onOpenOxygenOsBatterySettings = onOpenBatterySettings,
+                    onOpenColorOsBatterySettings = onOpenBatterySettings,
                     onOpenHealthConnectSettings = onOpenHealthConnectSettings,
                     onSyncSteps = { viewModel.refreshPermissionsAndSteps() },
                     onLogManualSteps = { viewModel.logManualSteps(it) },
