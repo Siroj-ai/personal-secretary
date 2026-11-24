@@ -26,6 +26,7 @@ object ExecutiveAnalyticsEngine {
         healthVitals: HealthVitalsSummary = HealthVitalsSummary(),
         calendarEvents: List<CalendarEventItem> = emptyList(),
         tasks: List<SecretaryTask> = emptyList(),
+        emailAlerts: List<EmailAlertItem> = emptyList(),
         nowMillis: Long = System.currentTimeMillis()
     ): ExecutiveSnapshot {
         val todayIso = today.format(isoFmt)
@@ -160,6 +161,10 @@ object ExecutiveAnalyticsEngine {
             due != null && due >= todayStartMillis && due < tomorrowStartMillis
         }
 
+        val recentEmails = emailAlerts.sortedByDescending { it.receivedAtMillis }.take(40)
+        val unreadEmailsCount = recentEmails.count { !it.isRead }
+        val urgentEmailsCount = recentEmails.count { !it.isRead && it.isUrgent }
+
         val insights = buildInsights(
             debitBalance = debitBalance,
             creditBalance = creditBalance,
@@ -176,6 +181,9 @@ object ExecutiveAnalyticsEngine {
             pendingTasks = pendingTasks,
             overdueTasksCount = overdueTasksCount,
             dueTodayTasksCount = dueTodayTasksCount,
+            recentEmails = recentEmails,
+            unreadEmailsCount = unreadEmailsCount,
+            urgentEmailsCount = urgentEmailsCount,
             profile = profile
         )
 
@@ -213,6 +221,9 @@ object ExecutiveAnalyticsEngine {
             pendingTasks = pendingTasks,
             overdueTasksCount = overdueTasksCount,
             dueTodayTasksCount = dueTodayTasksCount,
+            recentEmails = recentEmails,
+            unreadEmailsCount = unreadEmailsCount,
+            urgentEmailsCount = urgentEmailsCount,
             insights = insights
         )
     }
@@ -233,10 +244,37 @@ object ExecutiveAnalyticsEngine {
         pendingTasks: List<SecretaryTask>,
         overdueTasksCount: Int,
         dueTodayTasksCount: Int,
+        recentEmails: List<EmailAlertItem>,
+        unreadEmailsCount: Int,
+        urgentEmailsCount: Int,
         profile: SecretaryProfile
     ): List<ExecutiveInsight> {
         val cur = profile.currencySymbol
         val list = mutableListOf<ExecutiveInsight>()
+
+        if (urgentEmailsCount > 0) {
+            val topMail = recentEmails.firstOrNull { !it.isRead && it.isUrgent }
+            list += ExecutiveInsight(
+                id = "emails_urgent",
+                domain = InsightDomain.EMAIL,
+                severity = InsightSeverity.CAUTION,
+                title = "$urgentEmailsCount Urgent Email Alert${if (urgentEmailsCount > 1) "s" else ""}",
+                detail = topMail?.let { "${it.sender}: '${it.subject}' (${it.tag.label})." }
+                    ?: "Urgent incoming email alerts are waiting in your Inbox.",
+                recommendation = "Review in Schedule -> Email Inbox and tap 'Add Task' on anything requiring follow-up."
+            )
+        } else if (unreadEmailsCount > 0) {
+            val topMail = recentEmails.firstOrNull { !it.isRead }
+            list += ExecutiveInsight(
+                id = "emails_unread",
+                domain = InsightDomain.EMAIL,
+                severity = InsightSeverity.INFO,
+                title = "$unreadEmailsCount Unread Inbox Alert${if (unreadEmailsCount > 1) "s" else ""}",
+                detail = topMail?.let { "Latest from ${it.sender}: '${it.subject}'." }
+                    ?: "New incoming email alerts captured on-device.",
+                recommendation = "Ask Clara to summarize your inbox or convert key bills/requests into scheduled tasks."
+            )
+        }
 
         if (overdueTasksCount > 0) {
             val first = pendingTasks.firstOrNull { it.dueAtMillis != null }
@@ -469,9 +507,20 @@ object ExecutiveAnalyticsEngine {
             sb.appendLine("  * [${task.priority.label}/${task.category.label}] ${task.title} (Due: $dueLbl)")
         }
 
+        if (snapshot.recentEmails.isNotEmpty()) {
+            sb.appendLine()
+            sb.appendLine("[4. RECENT EMAIL ALERTS (ON-DEVICE NOTIFICATION INBOX)]")
+            sb.appendLine("- Captured Emails: ${snapshot.recentEmails.size} | Unread: ${snapshot.unreadEmailsCount} | Urgent: ${snapshot.urgentEmailsCount}")
+            snapshot.recentEmails.take(8).forEach { mail ->
+                val stateLbl = if (mail.isRead) "READ" else if (mail.isUrgent) "URGENT" else "UNREAD"
+                val snip = if (mail.snippet.isNotBlank()) " — ${mail.snippet.take(120)}" else ""
+                sb.appendLine("  * [$stateLbl/${mail.tag.label}] ${mail.sender}: ${mail.subject}$snip (${formatMillisDateTime(mail.receivedAtMillis)})")
+            }
+        }
+
         if (snapshot.insights.isNotEmpty()) {
             sb.appendLine()
-            sb.appendLine("[4. DETECTED EXECUTIVE ALERTS]")
+            sb.appendLine("[5. DETECTED EXECUTIVE ALERTS]")
             snapshot.insights.forEach { sb.appendLine("- [${it.domain}] ${it.title}: ${it.detail}") }
         }
         return sb.toString()
@@ -494,6 +543,12 @@ object ExecutiveAnalyticsEngine {
             snapshot.pendingTasks.take(3).forEach { t ->
                 val due = t.dueAtMillis?.let { " · ${formatMillisDateTime(it)}" }.orEmpty()
                 sb.appendLine("  – [${t.priority.label}] ${t.title}$due")
+            }
+        }
+        if (snapshot.recentEmails.isNotEmpty()) {
+            sb.appendLine("• Email Inbox: ${snapshot.unreadEmailsCount} unread (${snapshot.urgentEmailsCount} urgent) across Gmail/Outlook alerts.")
+            snapshot.recentEmails.filter { !it.isRead }.take(2).forEach { m ->
+                sb.appendLine("  – [${m.tag.label}] ${m.sender}: ${m.subject}")
             }
         }
         sb.appendLine()
@@ -566,6 +621,22 @@ object ExecutiveAnalyticsEngine {
                 • SSF Net Equity: ${formatMoney(c, ssf.netEquity)} (Interest spread: +${formatMoney(c, ssf.interestSpread)})
                 • Combined Net Estimate: ${formatMoney(c, snapshot.netWorthEstimate)}
                 """.trimIndent()
+            }
+            q.contains("email") || q.contains("inbox") || q.contains("mail") || q.contains("gmail") || q.contains("outlook") -> {
+                if (snapshot.recentEmails.isEmpty()) {
+                    "No incoming email notifications captured yet. Enable Notification Access in Schedule -> Email Inbox so Clara can summarize incoming Gmail/Outlook alerts locally."
+                } else {
+                    val items = snapshot.recentEmails.take(8).joinToString("\n") { m ->
+                        val status = if (m.isUrgent && !m.isRead) "URGENT" else if (!m.isRead) "UNREAD" else "Read"
+                        "• [$status · ${m.tag.label}] ${m.sender}: ${m.subject} (${formatMillisDateTime(m.receivedAtMillis)})"
+                    }
+                    """
+                    On-Device Email Inbox (${snapshot.unreadEmailsCount} unread · ${snapshot.urgentEmailsCount} urgent):
+                    $items
+
+                    Tip: Open Schedule -> Email Inbox to convert any bill or work email into a scheduled reminder in one tap.
+                    """.trimIndent()
+                }
             }
             q.contains("schedule") || q.contains("calendar") || q.contains("meeting") || q.contains("task") || q.contains("work") || q.contains("remind") -> {
                 val evLines = if (snapshot.todayEvents.isEmpty()) {

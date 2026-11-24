@@ -83,6 +83,7 @@ fun AdvisorScreen(
 
     val quickPrompts = remember {
         listOf(
+            "Summarize my recent emails",
             "Brief my schedule & work today",
             "Full financial & health audit",
             "Where am I leaking money?",

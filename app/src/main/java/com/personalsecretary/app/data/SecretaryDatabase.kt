@@ -95,12 +95,36 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
         )
 
         createTasksTable(db)
+        createEmailAlertsTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             createTasksTable(db)
         }
+        if (oldVersion < 3) {
+            createEmailAlertsTable(db)
+        }
+    }
+
+    private fun createEmailAlertsTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS email_alerts (
+                id TEXT PRIMARY KEY,
+                package_name TEXT NOT NULL,
+                app_label TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                snippet TEXT NOT NULL,
+                received_at_millis INTEGER NOT NULL,
+                tag TEXT NOT NULL,
+                is_urgent INTEGER NOT NULL,
+                is_read INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_email_received ON email_alerts(received_at_millis DESC)")
     }
 
     private fun createTasksTable(db: SQLiteDatabase) {
@@ -369,6 +393,79 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
         writableDatabase.delete("secretary_tasks", "id = ?", arrayOf(taskId))
     }
 
+    suspend fun upsertEmailAlert(alert: EmailAlertItem) = withContext(Dispatchers.IO) {
+        val db = writableDatabase
+        val cv = ContentValues().apply {
+            put("id", alert.id)
+            put("package_name", alert.packageName)
+            put("app_label", alert.appLabel)
+            put("sender", alert.sender)
+            put("subject", alert.subject)
+            put("snippet", alert.snippet)
+            put("received_at_millis", alert.receivedAtMillis)
+            put("tag", alert.tag.name)
+            put("is_urgent", if (alert.isUrgent) 1 else 0)
+            put("is_read", if (alert.isRead) 1 else 0)
+        }
+        db.insertWithOnConflict("email_alerts", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+        // Keep local inbox lean (latest 120 alerts)
+        db.execSQL(
+            """
+            DELETE FROM email_alerts
+            WHERE id NOT IN (
+                SELECT id FROM email_alerts ORDER BY received_at_millis DESC LIMIT 120
+            )
+            """.trimIndent()
+        )
+    }
+
+    suspend fun loadEmailAlerts(limit: Int = 100): List<EmailAlertItem> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<EmailAlertItem>()
+        readableDatabase.rawQuery(
+            """
+            SELECT id, package_name, app_label, sender, subject, snippet, received_at_millis, tag, is_urgent, is_read
+            FROM email_alerts
+            ORDER BY received_at_millis DESC
+            LIMIT ?
+            """.trimIndent(),
+            arrayOf(limit.toString())
+        ).use { c ->
+            while (c.moveToNext()) {
+                out += EmailAlertItem(
+                    id = c.getString(0),
+                    packageName = c.getString(1),
+                    appLabel = c.getString(2),
+                    sender = c.getString(3),
+                    subject = c.getString(4),
+                    snippet = c.getString(5),
+                    receivedAtMillis = c.getLong(6),
+                    tag = runCatching { EmailAlertTag.valueOf(c.getString(7)) }.getOrDefault(EmailAlertTag.GENERAL),
+                    isUrgent = c.getInt(8) == 1,
+                    isRead = c.getInt(9) == 1
+                )
+            }
+        }
+        out
+    }
+
+    suspend fun markEmailAlertRead(alertId: String, read: Boolean = true) = withContext(Dispatchers.IO) {
+        val cv = ContentValues().apply { put("is_read", if (read) 1 else 0) }
+        writableDatabase.update("email_alerts", cv, "id = ?", arrayOf(alertId))
+    }
+
+    suspend fun markAllEmailsRead() = withContext(Dispatchers.IO) {
+        val cv = ContentValues().apply { put("is_read", 1) }
+        writableDatabase.update("email_alerts", cv, null, null)
+    }
+
+    suspend fun deleteEmailAlert(alertId: String) = withContext(Dispatchers.IO) {
+        writableDatabase.delete("email_alerts", "id = ?", arrayOf(alertId))
+    }
+
+    suspend fun clearEmailAlerts() = withContext(Dispatchers.IO) {
+        writableDatabase.delete("email_alerts", null, null)
+    }
+
     suspend fun saveChatMessage(message: ChatMessage) = withContext(Dispatchers.IO) {
         val cv = ContentValues().apply {
             put("id", message.id)
@@ -414,6 +511,7 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
             db.delete("mental_checkins", null, null)
             db.delete("chat_messages", null, null)
             db.delete("secretary_tasks", null, null)
+            db.delete("email_alerts", null, null)
             db.delete("app_kv", null, null)
             db.setTransactionSuccessful()
         } finally {
@@ -444,7 +542,7 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DB_NAME = "personal_secretary.db"
-        private const val DB_VERSION = 2
+        private const val DB_VERSION = 3
         private const val KEY_PROFILE = "profile_v1"
         private const val KEY_SSF = "ssf_v1"
         private const val KEY_EARNINGS = "earnings_v1"

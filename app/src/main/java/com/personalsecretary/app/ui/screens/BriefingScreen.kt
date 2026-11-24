@@ -210,24 +210,32 @@ fun BriefingScreen(
                     onClick = onOpenFinances
                 )
 
+                val emailPill = if (snapshot.unreadEmailsCount > 0) {
+                    " · ${snapshot.unreadEmailsCount} email${if (snapshot.unreadEmailsCount == 1) "" else "s"}"
+                } else ""
                 PillarPulseRow(
                     icon = Icons.Default.EventNote,
                     iconTint = AccentGold,
-                    title = "Schedule & Work",
-                    headline = "${snapshot.todayEvents.size} event${if (snapshot.todayEvents.size == 1) "" else "s"} · ${snapshot.pendingTasks.size} open",
+                    title = "Schedule, Work & Inbox",
+                    headline = "${snapshot.todayEvents.size} event${if (snapshot.todayEvents.size == 1) "" else "s"} · ${snapshot.pendingTasks.size} open$emailPill",
                     subtitle = when {
+                        snapshot.urgentEmailsCount > 0 -> "${snapshot.urgentEmailsCount} urgent email alert${if (snapshot.urgentEmailsCount == 1) "" else "s"} in Inbox"
                         snapshot.overdueTasksCount > 0 -> "${snapshot.overdueTasksCount} overdue item${if (snapshot.overdueTasksCount == 1) "" else "s"} awaiting review"
                         snapshot.todayEvents.isNotEmpty() -> "Next: ${snapshot.todayEvents.first().title} (${ExecutiveAnalyticsEngine.formatEventTimeRange(snapshot.todayEvents.first())})"
                         snapshot.pendingTasks.isNotEmpty() -> "Top task: ${snapshot.pendingTasks.first().title}"
-                        else -> "Connect phone calendar or add work reminders"
+                        else -> "Connect calendar, email alerts, or add work reminders"
                     },
                     ringProgress = when {
-                        snapshot.overdueTasksCount > 0 -> 1f
-                        snapshot.pendingTasks.isEmpty() && snapshot.todayEvents.isEmpty() -> 0f
+                        snapshot.overdueTasksCount > 0 || snapshot.urgentEmailsCount > 0 -> 1f
+                        snapshot.pendingTasks.isEmpty() && snapshot.todayEvents.isEmpty() && snapshot.unreadEmailsCount == 0 -> 0f
                         else -> 0.65f
                     },
-                    ringColor = if (snapshot.overdueTasksCount > 0) CoralAccent else AccentGold,
-                    ringLabel = if (snapshot.overdueTasksCount > 0) "${snapshot.overdueTasksCount}!" else "${snapshot.todayEvents.size + snapshot.dueTodayTasksCount}",
+                    ringColor = if (snapshot.overdueTasksCount > 0 || snapshot.urgentEmailsCount > 0) CoralAccent else AccentGold,
+                    ringLabel = if (snapshot.overdueTasksCount + snapshot.urgentEmailsCount > 0) {
+                        "${snapshot.overdueTasksCount + snapshot.urgentEmailsCount}!"
+                    } else {
+                        "${snapshot.todayEvents.size + snapshot.dueTodayTasksCount + snapshot.unreadEmailsCount}"
+                    },
                     onClick = onOpenSchedule
                 )
 

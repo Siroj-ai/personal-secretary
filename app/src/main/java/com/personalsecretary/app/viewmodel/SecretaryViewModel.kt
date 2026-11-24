@@ -16,6 +16,8 @@ import com.personalsecretary.app.data.DailyStepRecord
 import com.personalsecretary.app.data.DayBookParserAndHygiene
 import com.personalsecretary.app.data.DayBookSyncClient
 import com.personalsecretary.app.data.EarningEntry
+import com.personalsecretary.app.data.EmailAlertItem
+import com.personalsecretary.app.data.EmailAlertTag
 import com.personalsecretary.app.data.ExecutiveAnalyticsEngine
 import com.personalsecretary.app.data.ExecutiveSnapshot
 import com.personalsecretary.app.data.FinancialHygieneReport
@@ -33,6 +35,8 @@ import com.personalsecretary.app.data.TaskRecurrence
 import com.personalsecretary.app.data.TransactionRecord
 import com.personalsecretary.app.health.OnePlusStepTracker
 import com.personalsecretary.app.health.StepPermissionStatus
+import com.personalsecretary.app.mail.EmailNotificationAccessHelper
+import com.personalsecretary.app.mail.EmailNotificationEvents
 import com.personalsecretary.app.media.SecretaryMediaStore
 import com.personalsecretary.app.schedule.DeviceCalendarReader
 import com.personalsecretary.app.schedule.TaskReminderScheduler
@@ -60,6 +64,8 @@ data class SecretaryUiState(
     val transactions: List<TransactionRecord> = emptyList(),
     val tasks: List<SecretaryTask> = emptyList(),
     val calendarPermissionGranted: Boolean = false,
+    val emailAlerts: List<EmailAlertItem> = emptyList(),
+    val notificationAccessGranted: Boolean = false,
     val chatMessages: List<ChatMessage> = emptyList(),
     val streamingReply: String = "",
     val isGeneratingChat: Boolean = false,
@@ -106,6 +112,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
     private var healthVitalsCache = HealthVitalsSummary()
     private var calendarEventsCache = emptyList<CalendarEventItem>()
     private var tasksCache = emptyList<SecretaryTask>()
+    private var emailAlertsCache = emptyList<EmailAlertItem>()
 
     private var generationJob: Job? = null
     private var tts: TextToSpeech? = null
@@ -144,6 +151,11 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             }
         }
+        viewModelScope.launch {
+            EmailNotificationEvents.updates.collect {
+                refreshEmailInbox()
+            }
+        }
     }
 
     private fun loadInitialState() {
@@ -157,7 +169,9 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
             hourlyStepsCache = database.loadHourlySteps()
             healthVitalsCache = database.loadHealthVitals()
             tasksCache = database.loadTasks()
+            emailAlertsCache = database.loadEmailAlerts(100)
             val calGranted = calendarReader.isCalendarPermissionGranted()
+            val notifAccess = EmailNotificationAccessHelper.isNotificationAccessGranted(getApplication())
             calendarEventsCache = if (calGranted) calendarReader.loadUpcomingEvents(7) else emptyList()
             TaskReminderScheduler.rescheduleAllPending(getApplication(), tasksCache)
             val chat = database.loadChatMessages(80)
@@ -193,6 +207,8 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                     transactions = txns,
                     tasks = tasksCache,
                     calendarPermissionGranted = calGranted,
+                    emailAlerts = emailAlertsCache,
+                    notificationAccessGranted = notifAccess,
                     chatMessages = chat,
                     videoSlots = videos,
                     briefingText = briefing,
@@ -222,7 +238,8 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
             profile = current.profile,
             healthVitals = healthVitalsCache,
             calendarEvents = calendarEventsCache,
-            tasks = tasksCache
+            tasks = tasksCache,
+            emailAlerts = emailAlertsCache
         )
         _uiState.update { it.copy(snapshot = snap) }
     }
@@ -231,6 +248,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
         stepTracker.startHardwareSensorIfPermitted()
         refreshPermissionsAndSteps()
         refreshScheduleAndCalendar()
+        refreshEmailInbox()
     }
 
     fun onBackgroundPause() {
@@ -362,9 +380,74 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun refreshEmailInbox() {
+        viewModelScope.launch {
+            val access = EmailNotificationAccessHelper.isNotificationAccessGranted(getApplication())
+            emailAlertsCache = database.loadEmailAlerts(100)
+            _uiState.update {
+                it.copy(
+                    notificationAccessGranted = access,
+                    emailAlerts = emailAlertsCache
+                )
+            }
+            recomputeSnapshot()
+        }
+    }
+
+    fun markEmailRead(alertId: String) {
+        viewModelScope.launch {
+            database.markEmailAlertRead(alertId, true)
+            refreshEmailInbox()
+        }
+    }
+
+    fun markAllEmailsRead() {
+        viewModelScope.launch {
+            database.markAllEmailsRead()
+            refreshEmailInbox()
+            _uiState.update { it.copy(statusToast = "Marked all inbox alerts as read.") }
+        }
+    }
+
+    fun deleteEmailAlert(alertId: String) {
+        viewModelScope.launch {
+            database.deleteEmailAlert(alertId)
+            refreshEmailInbox()
+        }
+    }
+
+    fun clearEmailAlerts() {
+        viewModelScope.launch {
+            database.clearEmailAlerts()
+            refreshEmailInbox()
+            _uiState.update { it.copy(statusToast = "Cleared local email alerts.") }
+        }
+    }
+
+    fun convertEmailToTask(alert: EmailAlertItem) {
+        val cat = when (alert.tag) {
+            EmailAlertTag.BILL_FINANCE -> TaskCategory.FINANCE
+            EmailAlertTag.MEETING_SCHEDULE, EmailAlertTag.WORK_ACTION -> TaskCategory.WORK
+            EmailAlertTag.GENERAL -> TaskCategory.PERSONAL
+        }
+        val prio = if (alert.isUrgent) TaskPriority.URGENT else TaskPriority.HIGH
+        val dueIn2Hours = System.currentTimeMillis() + (2L * 60L * 60L * 1000L)
+        addSecretaryTask(
+            title = alert.subject.ifBlank { "Reply to ${alert.sender}" },
+            notes = "From ${alert.sender} (${alert.appLabel}): ${alert.snippet}".trim(),
+            dueAtMillis = dueIn2Hours,
+            priority = prio,
+            category = cat,
+            recurrence = TaskRecurrence.NONE,
+            reminderEnabled = true
+        )
+        markEmailRead(alert.id)
+    }
+
     fun syncAllSources() {
         refreshPermissionsAndSteps()
         refreshScheduleAndCalendar()
+        refreshEmailInbox()
         syncDayBook()
     }
 
@@ -670,7 +753,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                     profile = st.profile,
                     recentTransactions = st.transactions
                 )
-                val prompt = "Deliver my concise Executive Briefing covering: 1) Today's Schedule & Work Priorities, 2) Financial Health & Cash Flow, 3) Physical Health (OnePlus 13 Steps & Watch Vitals if synced), and 4) Top 2 concrete actions for today."
+                val prompt = "Deliver my concise Executive Briefing covering: 1) Today's Schedule, Work & Urgent Emails, 2) Financial Health & Cash Flow, 3) Physical Health (Steps & Watch Vitals if synced), and 4) Top 2 concrete actions for today."
                 val res = gemmaEngine.generateConsultation(
                     profile = st.profile,
                     dossierContext = dossier,

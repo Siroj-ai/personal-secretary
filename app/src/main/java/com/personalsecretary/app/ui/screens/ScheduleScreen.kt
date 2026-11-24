@@ -19,13 +19,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddTask
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -35,8 +39,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -52,6 +58,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.personalsecretary.app.data.CalendarEventItem
+import com.personalsecretary.app.data.EmailAlertItem
+import com.personalsecretary.app.data.EmailAlertTag
 import com.personalsecretary.app.data.ExecutiveAnalyticsEngine
 import com.personalsecretary.app.data.ExecutiveSnapshot
 import com.personalsecretary.app.data.SecretaryTask
@@ -62,6 +70,7 @@ import com.personalsecretary.app.ui.components.ExecutiveCard
 import com.personalsecretary.app.ui.components.SectionHeader
 import com.personalsecretary.app.ui.theme.AccentGold
 import com.personalsecretary.app.ui.theme.CardBorder
+import com.personalsecretary.app.ui.theme.CardSurface
 import com.personalsecretary.app.ui.theme.CardSurfaceElevated
 import com.personalsecretary.app.ui.theme.CoralAccent
 import com.personalsecretary.app.ui.theme.EmeraldAccent
@@ -82,9 +91,13 @@ import java.time.temporal.TemporalAdjusters
 fun ScheduleScreen(
     snapshot: ExecutiveSnapshot,
     tasks: List<SecretaryTask>,
+    emailAlerts: List<EmailAlertItem>,
     calendarPermissionGranted: Boolean,
+    notificationAccessGranted: Boolean,
     statusToast: String?,
     onRequestCalendarPermission: () -> Unit,
+    onOpenNotificationAccessSettings: () -> Unit,
+    onOpenAppInfoSettings: () -> Unit,
     onRefreshSchedule: () -> Unit,
     onAddTask: (
         title: String,
@@ -97,9 +110,17 @@ fun ScheduleScreen(
     ) -> Unit,
     onToggleTask: (String) -> Unit,
     onDeleteTask: (String) -> Unit,
-    onAskClaraAboutSchedule: () -> Unit
+    onMarkEmailRead: (String) -> Unit,
+    onMarkAllEmailsRead: () -> Unit,
+    onConvertEmailToTask: (EmailAlertItem) -> Unit,
+    onDeleteEmailAlert: (String) -> Unit,
+    onClearEmailAlerts: () -> Unit,
+    onAskClaraAboutSchedule: () -> Unit,
+    onAskClaraAboutInbox: () -> Unit
 ) {
+    var subTab by remember { mutableStateOf(0) } // 0 = Agenda & Tasks, 1 = Email Inbox
     var filter by remember { mutableStateOf("OPEN") } // OPEN, TODAY, WORK, FINANCE, DONE
+    var emailFilter by remember { mutableStateOf("ALL") } // ALL, UNREAD, WORK, BILL, MEETING
     var showAddDialog by remember { mutableStateOf(false) }
     var presetTitle by remember { mutableStateOf("") }
     var presetCategory by remember { mutableStateOf(TaskCategory.WORK) }
@@ -121,10 +142,62 @@ fun ScheduleScreen(
         }
     }
 
+    val filteredEmails = remember(emailAlerts, emailFilter) {
+        when (emailFilter) {
+            "UNREAD" -> emailAlerts.filter { !it.isRead }
+            "WORK" -> emailAlerts.filter { it.tag == EmailAlertTag.WORK_ACTION }
+            "BILL" -> emailAlerts.filter { it.tag == EmailAlertTag.BILL_FINANCE }
+            "MEETING" -> emailAlerts.filter { it.tag == EmailAlertTag.MEETING_SCHEDULE }
+            else -> emailAlerts
+        }
+    }
+
     val futureEvents = remember(snapshot.upcomingEvents7d, snapshot.todayEvents) {
         val todayKeys = snapshot.todayEvents.map { "${it.id}_${it.startMillis}" }.toSet()
         snapshot.upcomingEvents7d.filterNot { "${it.id}_${it.startMillis}" in todayKeys }.take(8)
     }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        PrimaryTabRow(
+            selectedTabIndex = subTab,
+            containerColor = CardSurface,
+            contentColor = AccentGold
+        ) {
+            Tab(
+                selected = subTab == 0,
+                onClick = { subTab = 0 },
+                text = { Text("Agenda & Tasks", style = MaterialTheme.typography.labelMedium, maxLines = 1) }
+            )
+            val unreadBadge = if (snapshot.unreadEmailsCount > 0) " (${snapshot.unreadEmailsCount})" else ""
+            Tab(
+                selected = subTab == 1,
+                onClick = { subTab = 1 },
+                text = { Text("Email Inbox$unreadBadge", style = MaterialTheme.typography.labelMedium, maxLines = 1) }
+            )
+        }
+
+        if (subTab == 1) {
+            EmailInboxContent(
+                emails = filteredEmails,
+                totalCount = emailAlerts.size,
+                unreadCount = snapshot.unreadEmailsCount,
+                urgentCount = snapshot.urgentEmailsCount,
+                emailFilter = emailFilter,
+                onSelectFilter = { emailFilter = it },
+                notificationAccessGranted = notificationAccessGranted,
+                statusToast = statusToast,
+                onOpenNotificationAccessSettings = onOpenNotificationAccessSettings,
+                onOpenAppInfoSettings = onOpenAppInfoSettings,
+                onRefresh = onRefreshSchedule,
+                onMarkRead = onMarkEmailRead,
+                onMarkAllRead = onMarkAllEmailsRead,
+                onConvertToTask = onConvertEmailToTask,
+                onDelete = onDeleteEmailAlert,
+                onClearAll = onClearEmailAlerts,
+                onAskClaraAboutInbox = onAskClaraAboutInbox
+            )
+            return@Column
+        }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -398,6 +471,7 @@ fun ScheduleScreen(
                 )
             }
         }
+    }
     }
 
     if (showAddDialog) {
@@ -728,4 +802,326 @@ private fun AddTaskDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+}
+
+@Composable
+private fun EmailInboxContent(
+    emails: List<EmailAlertItem>,
+    totalCount: Int,
+    unreadCount: Int,
+    urgentCount: Int,
+    emailFilter: String,
+    onSelectFilter: (String) -> Unit,
+    notificationAccessGranted: Boolean,
+    statusToast: String?,
+    onOpenNotificationAccessSettings: () -> Unit,
+    onOpenAppInfoSettings: () -> Unit,
+    onRefresh: () -> Unit,
+    onMarkRead: (String) -> Unit,
+    onMarkAllRead: () -> Unit,
+    onConvertToTask: (EmailAlertItem) -> Unit,
+    onDelete: (String) -> Unit,
+    onClearAll: () -> Unit,
+    onAskClaraAboutInbox: () -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                    Text(
+                        text = "On-Device Email Inbox",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "Private notification reader · OTPs auto-filtered",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                OutlinedButton(
+                    onClick = onRefresh,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.size(4.dp))
+                    Text("Refresh", maxLines = 1, softWrap = false)
+                }
+            }
+        }
+
+        if (!statusToast.isNullOrBlank()) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = CardSurfaceElevated,
+                    border = BorderStroke(1.dp, AccentGold.copy(alpha = 0.45f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = statusToast,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AccentGold,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
+            }
+        }
+
+        // Notification Access Status & Privacy Card
+        item {
+            ExecutiveCard(
+                borderColor = if (notificationAccessGranted) EmeraldAccent.copy(alpha = 0.45f) else AccentGold.copy(alpha = 0.55f)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = if (notificationAccessGranted) Icons.Default.Shield else Icons.Default.Email,
+                        contentDescription = null,
+                        tint = if (notificationAccessGranted) EmeraldAccent else AccentGold,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    SectionHeader(
+                        title = if (notificationAccessGranted) "Email Listener Active" else "Enable On-Device Email Reader",
+                        subtitle = if (notificationAccessGranted) {
+                            "$unreadCount unread · $urgentCount urgent · Gmail, Outlook & major mail apps"
+                        } else {
+                            "Reads only email app notifications locally — zero cloud servers"
+                        }
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                if (!notificationAccessGranted) {
+                    Text(
+                        text = "1) On ColorOS 17 / Android 17, if 'Personal Secretary' is greyed out as a Restricted setting, tap App Info below -> top-right menu (⋮) -> Allow restricted settings.\n2) Tap Enable Notification Access and turn on Personal Secretary Email Reader.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = onOpenNotificationAccessSettings,
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentGold, contentColor = ObsidianBg),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Notification Access", maxLines = 1, softWrap = false)
+                        }
+                        OutlinedButton(
+                            onClick = onOpenAppInfoSettings,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("App Info (Unlock)", maxLines = 1, softWrap = false)
+                        }
+                    }
+                } else {
+                    Text(
+                        text = "Privacy Shield: Only allowlisted email apps are captured. OTPs, 2FA codes, SMS, and chat apps are automatically ignored.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = onAskClaraAboutInbox,
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentGold, contentColor = ObsidianBg),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Summarize with Clara", maxLines = 1, softWrap = false)
+                        }
+                        if (unreadCount > 0) {
+                            OutlinedButton(
+                                onClick = onMarkAllRead,
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.DoneAll, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Read All", maxLines = 1, softWrap = false)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Filter Chips + Clear
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                listOf(
+                    "ALL" to "All ($totalCount)",
+                    "UNREAD" to "Unread ($unreadCount)",
+                    "BILL" to "Bills",
+                    "WORK" to "Work",
+                    "MEETING" to "Meetings"
+                ).forEach { (key, label) ->
+                    FilterChip(
+                        selected = emailFilter == key,
+                        onClick = { onSelectFilter(key) },
+                        label = { Text(label, maxLines = 1, softWrap = false) }
+                    )
+                }
+                if (totalCount > 0) {
+                    TextButton(onClick = onClearAll) {
+                        Text("Clear All", color = CoralAccent, maxLines = 1, softWrap = false)
+                    }
+                }
+            }
+        }
+
+        if (emails.isEmpty()) {
+            item {
+                ExecutiveCard {
+                    Text(
+                        text = if (notificationAccessGranted) {
+                            "No email notifications captured in this filter yet. New Gmail or Outlook notifications will appear here automatically."
+                        } else {
+                            "Enable Notification Access above to start capturing incoming Gmail & Outlook alerts privately on-device."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextMuted
+                    )
+                }
+            }
+        } else {
+            items(emails, key = { it.id }) { item ->
+                EmailAlertRowCard(
+                    alert = item,
+                    onMarkRead = { onMarkRead(item.id) },
+                    onConvertToTask = { onConvertToTask(item) },
+                    onDelete = { onDelete(item.id) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmailAlertRowCard(
+    alert: EmailAlertItem,
+    onMarkRead: () -> Unit,
+    onConvertToTask: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val tagColor = when (alert.tag) {
+        EmailAlertTag.BILL_FINANCE -> CoralAccent
+        EmailAlertTag.WORK_ACTION -> AccentGold
+        EmailAlertTag.MEETING_SCHEDULE -> SkyAccent
+        EmailAlertTag.GENERAL -> TextMuted
+    }
+    val border = when {
+        !alert.isRead && alert.isUrgent -> CoralAccent.copy(alpha = 0.55f)
+        !alert.isRead -> AccentGold.copy(alpha = 0.45f)
+        else -> CardBorder
+    }
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = CardSurfaceElevated,
+        border = BorderStroke(1.dp, border),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "${alert.appLabel} · ${alert.tag.label}${if (alert.isUrgent) " · URGENT" else ""}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tagColor,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = ExecutiveAnalyticsEngine.formatMillisDateTime(alert.receivedAtMillis),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted
+                )
+            }
+            Text(
+                text = alert.sender,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (alert.isRead) TextMuted else TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = alert.subject,
+                style = MaterialTheme.typography.titleSmall,
+                color = if (alert.isRead) TextSecondary else TextPrimary,
+                fontWeight = if (alert.isRead) FontWeight.Normal else FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (alert.snippet.isNotBlank()) {
+                Text(
+                    text = alert.snippet,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = onConvertToTask,
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Default.AddTask, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Add Task", style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false)
+                    }
+                    if (!alert.isRead) {
+                        TextButton(
+                            onClick = onMarkRead,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text("Mark Read", style = MaterialTheme.typography.labelMedium, color = AccentGold)
+                        }
+                    }
+                }
+                IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.DeleteOutline,
+                        contentDescription = "Delete alert",
+                        tint = TextMuted,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+    }
 }

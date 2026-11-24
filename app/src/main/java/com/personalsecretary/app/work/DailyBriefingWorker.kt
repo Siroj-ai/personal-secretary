@@ -50,7 +50,8 @@ class DailyBriefingWorker(
             profile = profile,
             healthVitals = db.loadHealthVitals(),
             calendarEvents = events,
-            tasks = tasks
+            tasks = tasks,
+            emailAlerts = db.loadEmailAlerts(60)
         )
 
         val remainingSteps = (profile.dailyStepGoal - snapshot.todaySteps).coerceAtLeast(0L)
@@ -60,6 +61,9 @@ class DailyBriefingWorker(
             if (remainingSteps > 0L) append(" ($remainingSteps to go)")
             if (snapshot.todayEvents.isNotEmpty() || snapshot.pendingTasks.isNotEmpty()) {
                 append(" · ${snapshot.todayEvents.size} events, ${snapshot.pendingTasks.size} open tasks")
+            }
+            if (snapshot.unreadEmailsCount > 0) {
+                append(" · ${snapshot.unreadEmailsCount} unread email${if (snapshot.unreadEmailsCount == 1) "" else "s"}")
             }
         }
         postNotification(

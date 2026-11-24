@@ -37,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.health.connect.client.PermissionController
 import com.personalsecretary.app.data.SecretaryVideoSlot
+import com.personalsecretary.app.mail.EmailNotificationAccessHelper
 import com.personalsecretary.app.ui.screens.AdvisorScreen
 import com.personalsecretary.app.ui.screens.BriefingScreen
 import com.personalsecretary.app.ui.screens.FinancesScreen
@@ -80,6 +81,9 @@ class MainActivity : ComponentActivity() {
                     onOpenHealthConnectSettings = {
                         runCatching { startActivity(viewModel.stepTracker.createHealthConnectSettingsIntent()) }
                     },
+                    onOpenNotificationAccessSettings = {
+                        runCatching { startActivity(EmailNotificationAccessHelper.createNotificationAccessIntent()) }
+                    },
                     onLaunchApkInstaller = { apkFile ->
                         runCatching { startActivity(viewModel.otaManager.createInstallApkIntent(apkFile)) }
                     },
@@ -114,6 +118,7 @@ private fun PersonalSecretaryAppRoot(
     viewModel: SecretaryViewModel,
     onOpenBatterySettings: () -> Unit,
     onOpenHealthConnectSettings: () -> Unit,
+    onOpenNotificationAccessSettings: () -> Unit,
     onLaunchApkInstaller: (java.io.File) -> Unit,
     onOpenUnknownSourcesSettings: () -> Unit
 ) {
@@ -222,7 +227,9 @@ private fun PersonalSecretaryAppRoot(
                 TopDestination.SCHEDULE -> ScheduleScreen(
                     snapshot = uiState.snapshot,
                     tasks = uiState.tasks,
+                    emailAlerts = uiState.emailAlerts,
                     calendarPermissionGranted = uiState.calendarPermissionGranted,
+                    notificationAccessGranted = uiState.notificationAccessGranted,
                     statusToast = uiState.statusToast,
                     onRequestCalendarPermission = {
                         val perms = buildList {
@@ -233,7 +240,12 @@ private fun PersonalSecretaryAppRoot(
                         }.toTypedArray()
                         calendarPermissionLauncher.launch(perms)
                     },
-                    onRefreshSchedule = { viewModel.refreshScheduleAndCalendar() },
+                    onOpenNotificationAccessSettings = onOpenNotificationAccessSettings,
+                    onOpenAppInfoSettings = onOpenBatterySettings,
+                    onRefreshSchedule = {
+                        viewModel.refreshScheduleAndCalendar()
+                        viewModel.refreshEmailInbox()
+                    },
                     onAddTask = { title, notes, dueMillis, priority, category, recurrence, reminder ->
                         viewModel.addSecretaryTask(
                             title = title,
@@ -247,9 +259,18 @@ private fun PersonalSecretaryAppRoot(
                     },
                     onToggleTask = { viewModel.toggleTaskCompleted(it) },
                     onDeleteTask = { viewModel.deleteSecretaryTask(it) },
+                    onMarkEmailRead = { viewModel.markEmailRead(it) },
+                    onMarkAllEmailsRead = { viewModel.markAllEmailsRead() },
+                    onConvertEmailToTask = { viewModel.convertEmailToTask(it) },
+                    onDeleteEmailAlert = { viewModel.deleteEmailAlert(it) },
+                    onClearEmailAlerts = { viewModel.clearEmailAlerts() },
                     onAskClaraAboutSchedule = {
                         currentTab = TopDestination.ADVISOR
-                        viewModel.sendConsultationMessage("Prioritize my schedule, meetings, and open work tasks for today alongside my budget and energy.")
+                        viewModel.sendConsultationMessage("Prioritize my schedule, meetings, open work tasks, and urgent emails for today alongside my budget and energy.")
+                    },
+                    onAskClaraAboutInbox = {
+                        currentTab = TopDestination.ADVISOR
+                        viewModel.sendConsultationMessage("Summarize my recent captured emails, highlight any urgent bills or work deadlines, and list what needs action first.")
                     }
                 )
 

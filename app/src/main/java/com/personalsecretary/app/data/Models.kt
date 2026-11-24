@@ -184,6 +184,28 @@ data class SecretaryTask(
 )
 
 @Serializable
+enum class EmailAlertTag(val label: String) {
+    BILL_FINANCE("Bill / Finance"),
+    WORK_ACTION("Work Action"),
+    MEETING_SCHEDULE("Meeting"),
+    GENERAL("Inbox")
+}
+
+@Serializable
+data class EmailAlertItem(
+    val id: String,
+    val packageName: String,
+    val appLabel: String,
+    val sender: String,
+    val subject: String,
+    val snippet: String,
+    val receivedAtMillis: Long = System.currentTimeMillis(),
+    val tag: EmailAlertTag = EmailAlertTag.GENERAL,
+    val isUrgent: Boolean = false,
+    val isRead: Boolean = false
+)
+
+@Serializable
 enum class SecretaryVideoSlot(
     val slotKey: String,
     val title: String,
@@ -259,6 +281,7 @@ enum class InsightDomain {
     FINANCIAL,
     PHYSICAL,
     SCHEDULE,
+    EMAIL,
     CROSS_DOMAIN
 }
 
@@ -305,5 +328,8 @@ data class ExecutiveSnapshot(
     val pendingTasks: List<SecretaryTask> = emptyList(),
     val overdueTasksCount: Int = 0,
     val dueTodayTasksCount: Int = 0,
+    val recentEmails: List<EmailAlertItem> = emptyList(),
+    val unreadEmailsCount: Int = 0,
+    val urgentEmailsCount: Int = 0,
     val insights: List<ExecutiveInsight> = emptyList()
 )
