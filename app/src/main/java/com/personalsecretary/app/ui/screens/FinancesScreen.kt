@@ -25,6 +25,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +48,7 @@ import com.personalsecretary.app.data.AccountType
 import com.personalsecretary.app.data.ExecutiveAnalyticsEngine
 import com.personalsecretary.app.data.ExecutiveSnapshot
 import com.personalsecretary.app.data.SecretaryProfile
+import com.personalsecretary.app.data.SsfSummary
 import com.personalsecretary.app.data.TransactionRecord
 import com.personalsecretary.app.ui.components.ExecutiveCard
 import com.personalsecretary.app.ui.components.MonthlyCashFlowChart
@@ -266,6 +268,13 @@ fun FinancesScreen(
             }
         }
 
+        // Social Security Fund (SSF) Full Breakdown Card
+        if (snapshot.ssfSummary.refundableAmount > 0.0 || snapshot.ssfSummary.totalDueAmount > 0.0) {
+            item {
+                SsfDetailsCard(ssf = snapshot.ssfSummary, currency = cur)
+            }
+        }
+
         // Monthly Cash Flow
         item {
             ExecutiveCard {
@@ -390,6 +399,92 @@ private fun BalanceStatCard(
         Text(value, style = MaterialTheme.typography.titleMedium, color = accent, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(sub, style = MaterialTheme.typography.bodySmall, color = TextSecondary, maxLines = 2)
+    }
+}
+
+@Composable
+private fun SsfDetailsCard(ssf: SsfSummary, currency: String) {
+    ExecutiveCard(borderColor = AccentGold.copy(alpha = 0.45f)) {
+        val loanSubtitle = if (ssf.loanAppliedPeriod > 0) {
+            "${ssf.contributedMonths} months contributed · Loan applied ${ssf.loanAppliedPeriod}x"
+        } else {
+            "${ssf.contributedMonths} months contributed"
+        }
+        SectionHeader(
+            title = "Social Security Fund (SSF)",
+            subtitle = loanSubtitle
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = "SAVINGS BREAKDOWN",
+            style = MaterialTheme.typography.labelSmall,
+            color = EmeraldAccent,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(6.dp))
+        SsfMetricRow("Refundable Savings", ExecutiveAnalyticsEngine.formatMoney(currency, ssf.refundableAmount), EmeraldAccent, bold = true)
+        SsfMetricRow("Pension Amount", ExecutiveAnalyticsEngine.formatMoney(currency, ssf.pensionAmount), TextPrimary)
+        SsfMetricRow("Retirement Amount", ExecutiveAnalyticsEngine.formatMoney(currency, ssf.retirementAmount), TextPrimary)
+        SsfMetricRow("Posted Return / Interest", ExecutiveAnalyticsEngine.formatMoney(currency, ssf.interestAmount), TextPrimary)
+        SsfMetricRow("FY Accrued Interest", ExecutiveAnalyticsEngine.formatMoney(currency, ssf.accruedInterest), AccentGold)
+
+        Spacer(Modifier.height(10.dp))
+        HorizontalDivider(color = CardBorder)
+        Spacer(Modifier.height(10.dp))
+
+        Text(
+            text = "SPECIAL LOAN & NET POSITION",
+            style = MaterialTheme.typography.labelSmall,
+            color = CoralAccent,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(6.dp))
+        SsfMetricRow("Loan Applied Period", if (ssf.loanAppliedPeriod > 0) "${ssf.loanAppliedPeriod}" else "—", TextPrimary)
+        SsfMetricRow("Due Principal", ExecutiveAnalyticsEngine.formatMoney(currency, ssf.duePrincipal), TextPrimary)
+        SsfMetricRow("Account Interest Due", ExecutiveAnalyticsEngine.formatMoney(currency, ssf.accountInterest), TextPrimary)
+        SsfMetricRow("Total Loan Due", ExecutiveAnalyticsEngine.formatMoney(currency, ssf.totalDueAmount), CoralAccent, bold = true)
+
+        Spacer(Modifier.height(8.dp))
+        HorizontalDivider(color = CardBorder)
+        Spacer(Modifier.height(8.dp))
+
+        SsfMetricRow("Net Equity (Savings − Loan)", ExecutiveAnalyticsEngine.formatMoney(currency, ssf.netEquity), EmeraldAccent, bold = true)
+        SsfMetricRow("Net Equity (incl. Accrued)", ExecutiveAnalyticsEngine.formatMoney(currency, ssf.netEquityWithAccrued), AccentGold, bold = true)
+        SsfMetricRow(
+            "Interest Spread (Savings − Loan)",
+            ExecutiveAnalyticsEngine.formatSignedMoney(currency, ssf.interestSpread),
+            if (ssf.interestSpread >= 0.0) EmeraldAccent else CoralAccent,
+            bold = true
+        )
+    }
+}
+
+@Composable
+private fun SsfMetricRow(
+    label: String,
+    value: String,
+    valueColor: androidx.compose.ui.graphics.Color,
+    bold: Boolean = false
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = TextSecondary,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            color = valueColor,
+            fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Medium
+        )
     }
 }
 

@@ -67,6 +67,27 @@ class DayBookAndAnalyticsTest {
 
         assertTrue(bundle.ssfSummary.refErrorDetected)
         assertEquals(247000.00, bundle.ssfSummary.netEquity, 0.01)
+        assertEquals(4, bundle.ssfSummary.loanAppliedPeriod)
+        assertEquals(100000.00, bundle.ssfSummary.pensionAmount, 0.01)
+        assertEquals(260000.00, bundle.ssfSummary.retirementAmount, 0.01)
+        assertEquals(40000.00, bundle.ssfSummary.interestAmount, 0.01)
+        assertEquals(5000.00, bundle.ssfSummary.accruedInterest, 0.01)
+        assertEquals(252000.00, bundle.ssfSummary.netEquityWithAccrued, 0.01)
+        assertEquals(2000.00, bundle.ssfSummary.interestSpread, 0.01)
+
+        val snap = ExecutiveAnalyticsEngine.computeSnapshot(
+            transactions = bundle.transactions,
+            ssf = bundle.ssfSummary,
+            earnings = bundle.earnings,
+            hygiene = bundle.hygieneReport,
+            steps = emptyList(),
+            hourlyStepsByDate = emptyMap(),
+            profile = SecretaryProfile(userName = "Client")
+        )
+        val dossier = ExecutiveAnalyticsEngine.buildGemmaDossier(snap, SecretaryProfile(userName = "Client"), bundle.transactions)
+        assertTrue(dossier.contains("Applied Period: 4"))
+        assertTrue(dossier.contains("Pension Rs. 100,000.00"))
+        assertTrue(dossier.contains("FY Accrued Interest Rs. 5,000.00"))
 
         assertEquals(2, bundle.earnings.size)
         assertEquals(75000.00, bundle.earnings.sumOf { it.amount }, 0.01)

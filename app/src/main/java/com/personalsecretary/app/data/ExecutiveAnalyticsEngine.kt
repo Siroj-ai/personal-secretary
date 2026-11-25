@@ -444,7 +444,18 @@ object ExecutiveAnalyticsEngine {
         sb.appendLine("- Liquid Debit Balance: ${formatMoney(c, snapshot.debitBalance)}")
         sb.appendLine("- Credit Card Balance: ${formatMoney(c, snapshot.creditCardBalance)}")
         if (snapshot.ssfSummary.refundableAmount > 0) {
-            sb.appendLine("- SSF Savings: ${formatMoney(c, snapshot.ssfSummary.refundableAmount)} | Special Loan Due: ${formatMoney(c, snapshot.ssfSummary.totalDueAmount)} | Net Equity: ${formatMoney(c, snapshot.ssfSummary.netEquity)} | Interest Spread: +${formatMoney(c, snapshot.ssfSummary.interestSpread)}")
+            val ssf = snapshot.ssfSummary
+            sb.appendLine(
+                "- SSF Savings (${ssf.contributedMonths} months): Refundable ${formatMoney(c, ssf.refundableAmount)} " +
+                    "(Pension ${formatMoney(c, ssf.pensionAmount)} + Retirement ${formatMoney(c, ssf.retirementAmount)} + Return ${formatMoney(c, ssf.interestAmount)}) | " +
+                    "FY Accrued Interest ${formatMoney(c, ssf.accruedInterest)}"
+            )
+            sb.appendLine(
+                "- SSF Special Loan (Applied Period: ${ssf.loanAppliedPeriod}): Due Principal ${formatMoney(c, ssf.duePrincipal)} + " +
+                    "Account Interest ${formatMoney(c, ssf.accountInterest)} = Total Due ${formatMoney(c, ssf.totalDueAmount)} | " +
+                    "Net Equity ${formatMoney(c, ssf.netEquity)} (w/ Accrued: ${formatMoney(c, ssf.netEquityWithAccrued)}) | " +
+                    "Interest Spread: ${formatSignedMoney(c, ssf.interestSpread)}"
+            )
         }
         if (snapshot.earningsTotal > 0) {
             sb.appendLine("- Extra Earnings (${snapshot.earningsMonthLabel}): ${formatMoney(c, snapshot.earningsTotal)}")
@@ -614,12 +625,14 @@ object ExecutiveAnalyticsEngine {
             q.contains("ssf") || q.contains("credit") || q.contains("loan") || q.contains("net worth") -> {
                 val ssf = snapshot.ssfSummary
                 """
-                Balance Sheet Snapshot:
+                Balance Sheet & SSF Snapshot:
                 • Debit Account: ${formatMoney(c, snapshot.debitBalance)}
                 • Credit Card: ${formatMoney(c, snapshot.creditCardBalance)}
-                • SSF Savings: ${formatMoney(c, ssf.refundableAmount)} (${ssf.contributedMonths} months) + ${formatMoney(c, ssf.accruedInterest)} accrued interest
-                • SSF Special Loan Due: ${formatMoney(c, ssf.totalDueAmount)} (Principal ${formatMoney(c, ssf.duePrincipal)} + Interest ${formatMoney(c, ssf.accountInterest)})
-                • SSF Net Equity: ${formatMoney(c, ssf.netEquity)} (Interest spread: +${formatMoney(c, ssf.interestSpread)})
+                • SSF Refundable Savings: ${formatMoney(c, ssf.refundableAmount)} (${ssf.contributedMonths} months)
+                  – Pension: ${formatMoney(c, ssf.pensionAmount)} | Retirement: ${formatMoney(c, ssf.retirementAmount)} | Posted Return: ${formatMoney(c, ssf.interestAmount)}
+                  – FY Accrued Interest: ${formatMoney(c, ssf.accruedInterest)}
+                • SSF Special Loan (Applied Period: ${ssf.loanAppliedPeriod}): Total Due ${formatMoney(c, ssf.totalDueAmount)} (Principal ${formatMoney(c, ssf.duePrincipal)} + Interest ${formatMoney(c, ssf.accountInterest)})
+                • SSF Net Equity: ${formatMoney(c, ssf.netEquity)} (With Accrued: ${formatMoney(c, ssf.netEquityWithAccrued)} | Interest Spread: ${formatSignedMoney(c, ssf.interestSpread)})
                 • Combined Net Estimate: ${formatMoney(c, snapshot.netWorthEstimate)}
                 """.trimIndent()
             }
