@@ -533,6 +533,7 @@ fun SamsungStyleStepsTabContent(
                     Column(modifier = Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         HorizontalDivider(color = CardBorder)
                         CompactPermRow("Health Connect Read Steps", stepPermissions.healthConnectStepsGranted)
+                        CompactPermRow("Health Connect Watch Vitals", stepPermissions.watchVitalsGranted)
                         CompactPermRow("Health Connect Background Read", stepPermissions.healthConnectBackgroundGranted)
                         CompactPermRow("OP 13 Physical Activity Sensor", stepPermissions.activityRecognitionGranted)
                         CompactPermRow("ColorOS 17 Battery Unrestricted", stepPermissions.batteryOptimizationIgnored)
@@ -542,32 +543,36 @@ fun SamsungStyleStepsTabContent(
                                 onClick = onRequestHealthConnectPermissions,
                                 colors = ButtonDefaults.buttonColors(containerColor = SamsungGreen, contentColor = ObsidianBg),
                                 shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("Health Connect", maxLines = 1)
+                                Text("Health Connect", maxLines = 1, softWrap = false)
                             }
                             OutlinedButton(
                                 onClick = onRequestActivityRecognition,
                                 shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("OP 13 Sensor", maxLines = 1)
+                                Text("OP 13 Sensor", maxLines = 1, softWrap = false)
                             }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
                                 onClick = onOpenColorOsBatterySettings,
                                 shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("ColorOS 17 Battery", maxLines = 1)
+                                Text("Battery Settings", maxLines = 1, softWrap = false)
                             }
                             OutlinedButton(
                                 onClick = onOpenHealthConnectSettings,
                                 shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("HC Data Sources", maxLines = 1)
+                                Text("HC Data Sources", maxLines = 1, softWrap = false)
                             }
                         }
 

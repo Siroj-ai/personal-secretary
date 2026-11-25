@@ -44,9 +44,13 @@ import com.personalsecretary.app.update.OtaUpdateManager
 import com.personalsecretary.app.update.OtaUpdateState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -85,7 +89,7 @@ data class SecretaryUiState(
         get() = when {
             (isGeneratingChat && streamingReply.isEmpty()) || isGeneratingBriefing -> SecretaryVideoSlot.THINKING
             isGeneratingChat && streamingReply.isNotEmpty() -> SecretaryVideoSlot.SPEAKING
-            snapshot.insights.any { it.severity == InsightSeverity.CAUTION } &&
+            (snapshot.overdueTasksCount > 0 || snapshot.urgentEmailsCount > 0) &&
                 videoSlots.containsKey(SecretaryVideoSlot.ALERT.slotKey) -> SecretaryVideoSlot.ALERT
             else -> SecretaryVideoSlot.IDLE
         }
@@ -155,6 +159,20 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
             EmailNotificationEvents.updates.collect {
                 refreshEmailInbox()
             }
+        }
+        // Auto-clear transient status banner after 4s so it doesn't stay stuck across tabs
+        viewModelScope.launch {
+            _uiState
+                .map { it.statusToast }
+                .distinctUntilChanged()
+                .collectLatest { toast ->
+                    if (!toast.isNullOrBlank()) {
+                        delay(4000L)
+                        _uiState.update { cur ->
+                            if (cur.statusToast == toast) cur.copy(statusToast = null) else cur
+                        }
+                    }
+                }
         }
     }
 

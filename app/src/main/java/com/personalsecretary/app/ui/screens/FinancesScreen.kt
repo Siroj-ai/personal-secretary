@@ -115,7 +115,7 @@ fun FinancesScreen(
                         .padding(end = 10.dp)
                 ) {
                     Text(
-                        text = "Financial Ledger",
+                        text = "Finances",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.SemiBold,
                         color = TextPrimary,
@@ -126,7 +126,7 @@ fun FinancesScreen(
                         text = snapshot.hygieneReport.lastSyncedLabel,
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
@@ -348,7 +348,7 @@ fun FinancesScreen(
                 ExecutiveCard {
                     Text(
                         text = if (transactions.isEmpty()) {
-                            "No transactions loaded yet. Configure your Day Book Apps Script URL or import a JSON/CSV file in Steps & Desk -> Secretary Setup."
+                            "No transactions loaded yet. Configure your Day Book Apps Script URL or import a JSON/CSV file in Health -> Secretary Setup."
                         } else {
                             "No transactions match your current filter."
                         },

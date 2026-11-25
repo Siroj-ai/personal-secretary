@@ -18,8 +18,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
+import androidx.compose.material.icons.automirrored.filled.EventNote
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.EventNote
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Wallet
@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.personalsecretary.app.data.ExecutiveAnalyticsEngine
 import com.personalsecretary.app.data.ExecutiveSnapshot
@@ -214,7 +215,7 @@ fun BriefingScreen(
                     " · ${snapshot.unreadEmailsCount} email${if (snapshot.unreadEmailsCount == 1) "" else "s"}"
                 } else ""
                 PillarPulseRow(
-                    icon = Icons.Default.EventNote,
+                    icon = Icons.AutoMirrored.Filled.EventNote,
                     iconTint = AccentGold,
                     title = "Schedule, Work & Inbox",
                     headline = "${snapshot.todayEvents.size} event${if (snapshot.todayEvents.size == 1) "" else "s"} · ${snapshot.pendingTasks.size} open$emailPill",
@@ -316,16 +317,18 @@ fun BriefingScreen(
                     OutlinedButton(
                         onClick = { onOpenAdvisor("Give me a concise action plan across my schedule, work tasks, finances, and health for the next 48 hours.") },
                         shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("48h Action Plan", maxLines = 1)
+                        Text("48h Plan", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                     OutlinedButton(
                         onClick = { onOpenAdvisor("Brief my schedule today, pending work, spending status, and steps.") },
                         shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Consult ${profile.secretaryName}", maxLines = 1)
+                        Text("Consult ${profile.secretaryName}", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -336,7 +339,7 @@ fun BriefingScreen(
             item {
                 SectionHeader(
                     title = "Priority Alerts & Insights",
-                    subtitle = "Computed locally across finances and daily steps"
+                    subtitle = "Computed locally across finances, schedule, inbox & health"
                 )
             }
             items(snapshot.insights, key = { it.id }) { insight ->

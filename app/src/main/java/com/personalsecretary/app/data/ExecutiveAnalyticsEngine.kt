@@ -12,6 +12,7 @@ object ExecutiveAnalyticsEngine {
 
     private val isoFmt = DateTimeFormatter.ISO_LOCAL_DATE
     private val timeFmt = DateTimeFormatter.ofPattern("h:mm a", Locale.US)
+    private val shortDateOnlyFmt = DateTimeFormatter.ofPattern("MMM d", Locale.US)
     private val shortDateTimeFmt = DateTimeFormatter.ofPattern("MMM d, h:mm a", Locale.US)
 
     fun computeSnapshot(
@@ -397,7 +398,7 @@ object ExecutiveAnalyticsEngine {
                 severity = InsightSeverity.INFO,
                 title = "Connect OnePlus 13 Steps",
                 detail = "Grant Health Connect or Physical Activity permission so your secretary can monitor daily movement automatically.",
-                recommendation = "Open Steps & Desk -> Steps to authorize Health Connect and enable ColorOS 17 background activity."
+                recommendation = "Open Health -> Health & Watch to authorize Health Connect and enable ColorOS 17 background activity."
             )
         } else if (stepPct >= 100) {
             list += ExecutiveInsight(
@@ -546,7 +547,7 @@ object ExecutiveAnalyticsEngine {
             }
         }
         if (snapshot.recentEmails.isNotEmpty()) {
-            sb.appendLine("• Email Inbox: ${snapshot.unreadEmailsCount} unread (${snapshot.urgentEmailsCount} urgent) across Gmail/Outlook alerts.")
+            sb.appendLine("• Email Inbox: ${snapshot.unreadEmailsCount} unread (${snapshot.urgentEmailsCount} urgent) across Gmail/Outlook/Edison Mail alerts.")
             snapshot.recentEmails.filter { !it.isRead }.take(2).forEach { m ->
                 sb.appendLine("  – [${m.tag.label}] ${m.sender}: ${m.subject}")
             }
@@ -624,7 +625,7 @@ object ExecutiveAnalyticsEngine {
             }
             q.contains("email") || q.contains("inbox") || q.contains("mail") || q.contains("gmail") || q.contains("outlook") -> {
                 if (snapshot.recentEmails.isEmpty()) {
-                    "No incoming email notifications captured yet. Enable Notification Access in Schedule -> Email Inbox so Clara can summarize incoming Gmail/Outlook alerts locally."
+                    "No incoming email notifications captured yet. Enable Notification Access in Schedule -> Email Inbox so Clara can summarize incoming Gmail, Outlook, or Edison Mail alerts locally."
                 } else {
                     val items = snapshot.recentEmails.take(8).joinToString("\n") { m ->
                         val status = if (m.isUrgent && !m.isRead) "URGENT" else if (!m.isRead) "UNREAD" else "Read"
@@ -711,6 +712,10 @@ object ExecutiveAnalyticsEngine {
         val start = Instant.ofEpochMilli(ev.startMillis).atZone(zone).format(timeFmt)
         val end = Instant.ofEpochMilli(ev.endMillis).atZone(zone).format(timeFmt)
         return "$start – $end"
+    }
+
+    fun formatMillisDateOnly(millis: Long, zone: ZoneId = ZoneId.systemDefault()): String {
+        return Instant.ofEpochMilli(millis).atZone(zone).format(shortDateOnlyFmt)
     }
 
     fun formatMillisDateTime(millis: Long, zone: ZoneId = ZoneId.systemDefault()): String {

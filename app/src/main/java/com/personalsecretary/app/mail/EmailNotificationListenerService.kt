@@ -24,8 +24,22 @@ class EmailNotificationListenerService : NotificationListenerService() {
         database = SecretaryDatabase(applicationContext)
     }
 
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        // Sweep any active email notifications already sitting in the tray when access is granted
+        runCatching {
+            activeNotifications?.forEach { sbn ->
+                processStatusBarNotification(sbn)
+            }
+        }
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         val statusBar = sbn ?: return
+        processStatusBarNotification(statusBar)
+    }
+
+    private fun processStatusBarNotification(statusBar: StatusBarNotification) {
         val pkg = statusBar.packageName ?: return
         if (!EmailNotificationClassifier.isAllowedEmailPackage(pkg)) return
 

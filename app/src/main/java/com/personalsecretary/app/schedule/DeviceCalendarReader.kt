@@ -9,8 +9,10 @@ import androidx.core.content.ContextCompat
 import com.personalsecretary.app.data.CalendarEventItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZoneOffset
 
 /**
  * Reads upcoming meetings and schedules directly from Android's synced Calendar Provider
@@ -58,18 +60,49 @@ class DeviceCalendarReader(private val context: Context) {
                 while (c.moveToNext()) {
                     val title = c.getString(1)?.trim().orEmpty()
                     if (title.isEmpty()) continue
+                    val rawBegin = c.getLong(2)
+                    val rawEnd = c.getLong(3)
+                    val allDay = c.getInt(4) == 1
+                    val (normBegin, normEnd) = normalizeEventBounds(rawBegin, rawEnd, allDay, zone)
+                    // Drop yesterday's UTC all-day spillover (e.g., UTC+05:45 Nepal) and events outside window
+                    if (normEnd <= startMillis || normBegin >= endMillis) continue
                     out += CalendarEventItem(
                         id = c.getLong(0),
                         title = title,
-                        startMillis = c.getLong(2),
-                        endMillis = c.getLong(3),
-                        allDay = c.getInt(4) == 1,
+                        startMillis = normBegin,
+                        endMillis = normEnd,
+                        allDay = allDay,
                         location = c.getString(5)?.trim().orEmpty(),
                         calendarName = c.getString(6)?.trim().orEmpty()
                     )
                 }
             }
-            out.distinctBy { "${it.id}_${it.startMillis}" }.take(60)
+            out.distinctBy { "${it.id}_${it.startMillis}" }
+                .sortedBy { it.startMillis }
+                .take(60)
         }.getOrDefault(emptyList())
+    }
+
+    companion object {
+        /**
+         * Android CalendarContract stores ALL_DAY event BEGIN/END in UTC midnight rather than
+         * the device's local timezone. In positive UTC offsets (like Nepal UTC+05:45), yesterday's
+         * all-day holiday otherwise spills 5h 45m into today. Normalizing UTC all-day dates to
+         * local midnight ensures accurate day attribution across all timezones.
+         */
+        fun normalizeEventBounds(
+            startMillis: Long,
+            endMillis: Long,
+            allDay: Boolean,
+            zone: ZoneId = ZoneId.systemDefault()
+        ): Pair<Long, Long> {
+            if (!allDay) return startMillis to endMillis
+            val startDateUtc = Instant.ofEpochMilli(startMillis).atZone(ZoneOffset.UTC).toLocalDate()
+            val endDateUtc = Instant.ofEpochMilli(endMillis).atZone(ZoneOffset.UTC).toLocalDate()
+            val safeEndDate = if (endDateUtc.isAfter(startDateUtc)) endDateUtc else startDateUtc.plusDays(1)
+            val localStart = startDateUtc.atStartOfDay(zone).toInstant().toEpochMilli()
+            val localEnd = safeEndDate.atStartOfDay(zone).toInstant().toEpochMilli()
+            return localStart to localEnd
+        }
     }
 }

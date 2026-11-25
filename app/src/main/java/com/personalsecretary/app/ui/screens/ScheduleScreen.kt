@@ -217,7 +217,7 @@ fun ScheduleScreen(
                         .padding(end = 10.dp)
                 ) {
                     Text(
-                        text = "Schedule & Work",
+                        text = "Schedule",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.SemiBold,
                         color = TextPrimary,
@@ -225,7 +225,7 @@ fun ScheduleScreen(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "Calendar agenda & exact-time reminders",
+                        text = "Calendar & reminders",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted,
                         maxLines = 1,
@@ -529,10 +529,10 @@ private fun CalendarEventRow(event: CalendarEventItem, isToday: Boolean) {
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            val timeStr = if (isToday) {
-                ExecutiveAnalyticsEngine.formatEventTimeRange(event)
-            } else {
-                ExecutiveAnalyticsEngine.formatMillisDateTime(event.startMillis)
+            val timeStr = when {
+                isToday -> ExecutiveAnalyticsEngine.formatEventTimeRange(event)
+                event.allDay -> "${ExecutiveAnalyticsEngine.formatMillisDateOnly(event.startMillis)} · All day"
+                else -> ExecutiveAnalyticsEngine.formatMillisDateTime(event.startMillis)
             }
             val meta = buildList {
                 add(timeStr)
@@ -837,7 +837,7 @@ private fun EmailInboxContent(
             ) {
                 Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                     Text(
-                        text = "On-Device Email Inbox",
+                        text = "Email Inbox",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.SemiBold,
                         color = TextPrimary,
@@ -845,7 +845,7 @@ private fun EmailInboxContent(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "Private notification reader · OTPs auto-filtered",
+                        text = "Private reader · OTPs auto-filtered",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted,
                         maxLines = 1,
@@ -900,7 +900,7 @@ private fun EmailInboxContent(
                     SectionHeader(
                         title = if (notificationAccessGranted) "Email Listener Active" else "Enable On-Device Email Reader",
                         subtitle = if (notificationAccessGranted) {
-                            "$unreadCount unread · $urgentCount urgent · Gmail, Outlook & major mail apps"
+                            "$unreadCount unread · $urgentCount urgent · Gmail, Outlook & Edison Mail"
                         } else {
                             "Reads only email app notifications locally — zero cloud servers"
                         }
@@ -909,7 +909,7 @@ private fun EmailInboxContent(
                 Spacer(Modifier.height(8.dp))
                 if (!notificationAccessGranted) {
                     Text(
-                        text = "1) On ColorOS 17 / Android 17, if 'Personal Secretary' is greyed out as a Restricted setting, tap App Info below -> top-right menu (⋮) -> Allow restricted settings.\n2) Tap Enable Notification Access and turn on Personal Secretary Email Reader.",
+                        text = "1) On ColorOS 17 / Android 17, if 'Personal Secretary' is greyed out as a Restricted setting, tap Unlock App Info below -> top-right menu (⋮) -> Allow restricted settings.\n2) Tap Enable Access and turn on Personal Secretary Email Reader.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
@@ -919,21 +919,23 @@ private fun EmailInboxContent(
                             onClick = onOpenNotificationAccessSettings,
                             colors = ButtonDefaults.buttonColors(containerColor = AccentGold, contentColor = ObsidianBg),
                             shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("Notification Access", maxLines = 1, softWrap = false)
+                            Text("Enable Access", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                         }
                         OutlinedButton(
                             onClick = onOpenAppInfoSettings,
                             shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("App Info (Unlock)", maxLines = 1, softWrap = false)
+                            Text("Unlock App Info", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 } else {
                     Text(
-                        text = "Privacy Shield: Only allowlisted email apps are captured. OTPs, 2FA codes, SMS, and chat apps are automatically ignored.",
+                        text = "Privacy Shield: Only allowlisted email apps (Gmail, Outlook, Edison Mail, etc.) are captured. OTPs, 2FA codes, SMS, and chat apps are automatically ignored.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
@@ -943,14 +945,16 @@ private fun EmailInboxContent(
                             onClick = onAskClaraAboutInbox,
                             colors = ButtonDefaults.buttonColors(containerColor = AccentGold, contentColor = ObsidianBg),
                             shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("Summarize with Clara", maxLines = 1, softWrap = false)
+                            Text("Summarize Inbox", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                         }
                         if (unreadCount > 0) {
                             OutlinedButton(
                                 onClick = onMarkAllRead,
-                                shape = RoundedCornerShape(10.dp)
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp)
                             ) {
                                 Icon(Icons.Default.DoneAll, contentDescription = null, modifier = Modifier.size(15.dp))
                                 Spacer(Modifier.width(4.dp))
@@ -997,9 +1001,9 @@ private fun EmailInboxContent(
                 ExecutiveCard {
                     Text(
                         text = if (notificationAccessGranted) {
-                            "No email notifications captured in this filter yet. New Gmail or Outlook notifications will appear here automatically."
+                            "No email notifications captured in this filter yet. New Gmail, Outlook, or Edison Mail alerts will appear here automatically."
                         } else {
-                            "Enable Notification Access above to start capturing incoming Gmail & Outlook alerts privately on-device."
+                            "Enable Notification Access above to start capturing incoming Gmail, Outlook & Edison Mail alerts privately on-device."
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextMuted

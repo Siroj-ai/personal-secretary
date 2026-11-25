@@ -93,6 +93,29 @@ class EmailNotificationClassifierTest {
         assertEquals(EmailAlertTag.WORK_ACTION, work!!.tag)
         assertTrue(work.isUrgent)
 
+        val edisonBooking = EmailNotificationClassifier.parseEmailNotification(
+            packageName = "com.easilydo.mail",
+            title = "Travel Desk",
+            text = "Reminder: Hotel booking confirmation action required",
+            bigText = "Reminder: Hotel booking confirmation action required\nPlease review before deadline.",
+            subText = "work@example.com",
+            postTimeMillis = now - 30_000L
+        )
+        assertNotNull(edisonBooking)
+        assertEquals("Edison Mail", edisonBooking!!.appLabel)
+        assertEquals(EmailAlertTag.WORK_ACTION, edisonBooking.tag)
+        assertTrue(edisonBooking.isUrgent)
+
+        val edisonOtp = EmailNotificationClassifier.parseEmailNotification(
+            packageName = "com.easilydo.mail",
+            title = "Security Alert",
+            text = "Your verification code is 991204",
+            bigText = "",
+            subText = "",
+            postTimeMillis = now
+        )
+        assertNull(edisonOtp)
+
         val profile = SecretaryProfile(userName = "Client")
         val snap = ExecutiveAnalyticsEngine.computeSnapshot(
             transactions = emptyList(),
@@ -103,17 +126,18 @@ class EmailNotificationClassifierTest {
             hourlyStepsByDate = emptyMap(),
             profile = profile,
             today = LocalDate.of(2026, 11, 24),
-            emailAlerts = listOf(bill, meeting, work),
+            emailAlerts = listOf(bill, meeting, work, edisonBooking),
             nowMillis = now
         )
 
-        assertEquals(3, snap.unreadEmailsCount)
-        assertEquals(2, snap.urgentEmailsCount)
+        assertEquals(4, snap.unreadEmailsCount)
+        assertEquals(3, snap.urgentEmailsCount)
         assertTrue(snap.insights.any { it.id == "emails_urgent" })
 
         val dossier = ExecutiveAnalyticsEngine.buildGemmaDossier(snap, profile, emptyList())
         assertTrue(dossier.contains("RECENT EMAIL ALERTS"))
         assertTrue(dossier.contains("Monthly Credit Card Statement"))
         assertTrue(dossier.contains("Action Required: Q4 Deliverable Proposal"))
+        assertTrue(dossier.contains("Travel Desk"))
     }
 }

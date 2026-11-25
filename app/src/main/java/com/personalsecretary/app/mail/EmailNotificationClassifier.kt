@@ -22,6 +22,7 @@ object EmailNotificationClassifier {
         "com.google.android.gm" to "Gmail",
         "com.google.android.gm.lite" to "Gmail Go",
         "com.microsoft.office.outlook" to "Outlook",
+        "com.easilydo.mail" to "Edison Mail",
         "com.yahoo.mobile.client.android.mail" to "Yahoo Mail",
         "ch.protonmail.android" to "Proton Mail",
         "com.samsung.android.email.provider" to "Samsung Email",
@@ -31,6 +32,11 @@ object EmailNotificationClassifier {
         "me.bluemail.mail" to "BlueMail",
         "com.zoho.mail" to "Zoho Mail",
         "com.fastmail.app" to "Fastmail",
+        "com.my.mail" to "myMail",
+        "org.kman.AquaMail" to "Aqua Mail",
+        "com.boxer.email" to "Boxer",
+        "com.netease.mail" to "MailMaster",
+        "com.android.email" to "Email",
         "com.oneplus.mail" to "Mail",
         "com.coloros.mail" to "Mail"
     )

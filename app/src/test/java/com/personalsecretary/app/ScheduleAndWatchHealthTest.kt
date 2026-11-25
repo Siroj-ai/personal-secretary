@@ -12,8 +12,10 @@ import com.personalsecretary.app.data.StepSource
 import com.personalsecretary.app.data.TaskCategory
 import com.personalsecretary.app.data.TaskPriority
 import com.personalsecretary.app.data.TaskRecurrence
+import com.personalsecretary.app.schedule.DeviceCalendarReader
 import com.personalsecretary.app.schedule.TaskReminderScheduler
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -22,6 +24,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 
 class ScheduleAndWatchHealthTest {
 
@@ -111,5 +114,32 @@ class ScheduleAndWatchHealthTest {
 
         val nextMonth = TaskReminderScheduler.computeNextOccurrenceMillis(base, TaskRecurrence.MONTHLY, zone)
         assertEquals(LocalDate.of(2026, 12, 24), Instant.ofEpochMilli(nextMonth!!).atZone(zone).toLocalDate())
+    }
+
+    @Test
+    fun normalizesUtcAllDayCalendarEventsForPositiveOffsetTimezones() {
+        val nepalZone = ZoneId.of("Asia/Kathmandu") // UTC+05:45
+        val today = LocalDate.of(2026, 11, 25)
+        val todayStart = today.atStartOfDay(nepalZone).toInstant().toEpochMilli()
+        val tomorrowStart = today.plusDays(1).atStartOfDay(nepalZone).toInstant().toEpochMilli()
+
+        // Yesterday's all-day holiday stored in UTC (Nov 24 00:00 UTC -> Nov 25 00:00 UTC = 05:45 NPT)
+        val yestBeginUtc = LocalDate.of(2026, 11, 24).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val yestEndUtc = LocalDate.of(2026, 11, 25).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val (normYestStart, normYestEnd) = DeviceCalendarReader.normalizeEventBounds(yestBeginUtc, yestEndUtc, true, nepalZone)
+
+        // Must NOT spill into Nov 25 in Nepal timezone!
+        assertFalse(normYestEnd > todayStart)
+        assertEquals(todayStart, normYestEnd)
+        assertEquals(LocalDate.of(2026, 11, 24), Instant.ofEpochMilli(normYestStart).atZone(nepalZone).toLocalDate())
+
+        // Today's all-day event stored in UTC (Nov 25 00:00 UTC -> Nov 26 00:00 UTC)
+        val todayBeginUtc = LocalDate.of(2026, 11, 25).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val todayEndUtc = LocalDate.of(2026, 11, 26).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val (normTodayStart, normTodayEnd) = DeviceCalendarReader.normalizeEventBounds(todayBeginUtc, todayEndUtc, true, nepalZone)
+
+        assertEquals(todayStart, normTodayStart)
+        assertEquals(tomorrowStart, normTodayEnd)
+        assertTrue(normTodayStart < tomorrowStart && normTodayEnd > todayStart)
     }
 }
