@@ -1,6 +1,7 @@
 package com.personalsecretary.app
 
 import com.personalsecretary.app.data.AccountType
+import com.personalsecretary.app.data.DailySpendStatus
 import com.personalsecretary.app.data.DayBookParserAndHygiene
 import com.personalsecretary.app.data.ExecutiveAnalyticsEngine
 import com.personalsecretary.app.data.FinancialHygieneReport
@@ -197,5 +198,62 @@ class NepalMarketAndDailySpendTest {
         assertTrue(detReply.contains("850.00"))
         assertTrue(detReply.contains("City Salon"))
         assertTrue(detReply.contains("REF-990123"))
+    }
+
+    @Test
+    fun computesDailyExpenses14dAndTailoredCoachingSuggestions() {
+        val today = LocalDate.of(2026, 11, 26)
+        val profile = SecretaryProfile(userName = "Client", monthlySpendBudget = 30000.0) // Rs. 1,000/day cap
+        val txns = listOf(
+            TransactionRecord("t1", AccountType.DEBIT, "2026-11-22", "11/22/2026", "Groceries", "Groceries", 2500.0, 0.0, 80000.0, "Food & Dining"),
+            TransactionRecord("t2", AccountType.DEBIT, "2026-11-24", "11/24/2026", "cigare", "cigare", 180.0, 0.0, 79820.0, "Tobacco & Alcohol"),
+            TransactionRecord("t3", AccountType.DEBIT, "2026-11-25", "11/25/2026", "Lunch", "Lunch", 450.0, 0.0, 79370.0, "Food & Dining"),
+            TransactionRecord("t4", AccountType.DEBIT, "2026-11-25", "11/25/2026", "REF-555", "REF-555", 150.0, 0.0, 79220.0, "Uncategorized")
+        )
+
+        val snap = ExecutiveAnalyticsEngine.computeSnapshot(
+            transactions = txns,
+            ssf = SsfSummary(),
+            earnings = emptyList(),
+            hygiene = FinancialHygieneReport(uniqueDebitRows = 4),
+            steps = emptyList(),
+            hourlyStepsByDate = emptyMap(),
+            profile = profile,
+            today = today
+        )
+
+        assertEquals(1000.0, snap.dailyBudgetAllowance, 0.01)
+        assertEquals(14, snap.dailyExpenses14d.size)
+
+        val day22 = snap.dailyExpenses14d.first { it.dateIso == "2026-11-22" }
+        val day24 = snap.dailyExpenses14d.first { it.dateIso == "2026-11-24" }
+        val day25 = snap.dailyExpenses14d.first { it.dateIso == "2026-11-25" }
+        val day26 = snap.dailyExpenses14d.first { it.dateIso == "2026-11-26" }
+
+        assertEquals(DailySpendStatus.OVER_BUDGET, day22.status)
+        assertTrue(day22.advice.contains("Exceeded daily cap"))
+        assertEquals(180.0, day24.tobaccoAlcoholSpend, 0.01)
+        assertTrue(day24.advice.contains("Tobacco & Alcohol"))
+        assertEquals(DailySpendStatus.UNDER_BUDGET, day25.status)
+        assertEquals(2, day25.txCount)
+        assertEquals(1, day25.uncategorizedCount)
+        assertEquals(DailySpendStatus.NO_SPEND, day26.status)
+        assertEquals("Today", day26.dayShortLabel)
+
+        assertTrue(snap.dailyCoachingHeadline.isNotBlank())
+        assertTrue(snap.dailyCoachingSuggestions.size >= 2)
+        assertTrue(snap.dailyCoachingSuggestions.any { it.contains("Tobacco & Alcohol") })
+        assertTrue(snap.dailyCoachingSuggestions.any { it.contains("2026-11-22") })
+
+        val dailyReply = ExecutiveAnalyticsEngine.buildDeterministicReply(
+            userQuery = "Analyze my daily expenses",
+            snapshot = snap,
+            profile = profile,
+            transactions = txns,
+            today = today
+        )
+        assertTrue(dailyReply.contains("Daily Expense Coach"))
+        assertTrue(dailyReply.contains("2026-11-25"))
+        assertTrue(dailyReply.contains("Suggestions:"))
     }
 }

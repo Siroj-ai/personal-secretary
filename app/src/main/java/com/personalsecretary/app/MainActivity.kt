@@ -359,6 +359,12 @@ private fun PersonalSecretaryAppRoot(
                     onUpdateTransaction = { txId, desc, cat ->
                         viewModel.updateTransactionDetails(txId, desc, cat)
                     },
+                    onAskClaraAboutDailyExpenses = {
+                        currentTab = TopDestination.ADVISOR
+                        viewModel.sendConsultationMessage(
+                            "Analyze my daily expenses over the last 7 days against my daily budget cap and give me specific suggestions to optimize today's spending."
+                        )
+                    },
                     onAskClaraAboutInvesting = {
                         currentTab = TopDestination.ADVISOR
                         viewModel.sendConsultationMessage(

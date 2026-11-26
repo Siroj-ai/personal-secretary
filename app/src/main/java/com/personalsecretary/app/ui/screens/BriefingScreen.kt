@@ -261,6 +261,118 @@ fun BriefingScreen(
             }
         }
 
+        // Daily Expense Coach Snapshot
+        if (snapshot.dailyExpenses14d.isNotEmpty()) {
+            item {
+                val dailyOver = snapshot.dailyBudgetAllowance > 0.0 &&
+                    (snapshot.todaySpend > snapshot.dailyBudgetAllowance || snapshot.avgDailySpend7d > snapshot.dailyBudgetAllowance * 1.15)
+                ExecutiveCard(
+                    borderColor = if (dailyOver) CoralAccent.copy(alpha = 0.45f) else EmeraldAccent.copy(alpha = 0.4f)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                text = "Daily Expenses & Coach",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "Cap ${cur} ${String.format(Locale.US, "%,.0f", snapshot.dailyBudgetAllowance)}/d · 7d avg ${cur} ${String.format(Locale.US, "%,.0f", snapshot.avgDailySpend7d)}/d",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextMuted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = onOpenFinances,
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text("Details", maxLines = 1, softWrap = false)
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = CardSurfaceElevated,
+                            border = BorderStroke(1.dp, CardBorder),
+                            modifier = Modifier.weight(1f).clickable(onClick = onOpenFinances)
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text("Today", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                                Text(
+                                    text = ExecutiveAnalyticsEngine.formatMoney(cur, snapshot.todaySpend),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = if (snapshot.dailyBudgetAllowance > 0.0 && snapshot.todaySpend > snapshot.dailyBudgetAllowance) CoralAccent else EmeraldAccent,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = CardSurfaceElevated,
+                            border = BorderStroke(1.dp, CardBorder),
+                            modifier = Modifier.weight(1f).clickable(onClick = onOpenFinances)
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text("Yesterday", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                                Text(
+                                    text = ExecutiveAnalyticsEngine.formatMoney(cur, snapshot.yesterdaySpend),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = if (snapshot.dailyBudgetAllowance > 0.0 && snapshot.yesterdaySpend > snapshot.dailyBudgetAllowance) CoralAccent else TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                    if (snapshot.dailyCoachingHeadline.isNotBlank()) {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = snapshot.dailyCoachingHeadline,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AccentGold,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                    snapshot.dailyCoachingSuggestions.firstOrNull()?.let { topTip ->
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "• $topTip",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = {
+                            onOpenAdvisor("Analyze my daily expenses over the last 7 days against my daily cap and suggest concrete ways to improve today's spending.")
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(15.dp), tint = AccentGold)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Ask ${profile.secretaryName} for Daily Advice", maxLines = 1, softWrap = false)
+                    }
+                }
+            }
+        }
+
         // Executive Briefing Card
         item {
             ExecutiveCard(borderColor = AccentGold.copy(alpha = 0.45f)) {

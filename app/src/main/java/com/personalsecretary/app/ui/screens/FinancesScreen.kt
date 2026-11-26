@@ -1,13 +1,17 @@
 package com.personalsecretary.app.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -46,10 +51,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.personalsecretary.app.data.AccountType
+import com.personalsecretary.app.data.DailyExpenseSummary
+import com.personalsecretary.app.data.DailySpendStatus
 import com.personalsecretary.app.data.ExecutiveAnalyticsEngine
 import com.personalsecretary.app.data.ExecutiveSnapshot
 import com.personalsecretary.app.data.NepalIpoItem
@@ -71,6 +82,7 @@ import com.personalsecretary.app.ui.theme.TextMuted
 import com.personalsecretary.app.ui.theme.TextPrimary
 import com.personalsecretary.app.ui.theme.TextSecondary
 import java.util.Locale
+import kotlin.math.sqrt
 
 @Composable
 fun FinancesScreen(
@@ -86,6 +98,7 @@ fun FinancesScreen(
     onRunSmartAlertsNow: () -> Unit,
     onAddTransaction: (description: String, amount: Double, isDebit: Boolean, category: String, pushRemote: Boolean) -> Unit,
     onUpdateTransaction: (txId: String, description: String, category: String) -> Unit,
+    onAskClaraAboutDailyExpenses: () -> Unit,
     onAskClaraAboutInvesting: () -> Unit,
     onNavigateToSetup: () -> Unit
 ) {
@@ -305,6 +318,19 @@ fun FinancesScreen(
                         modifier = Modifier.padding(10.dp)
                     )
                 }
+            }
+        }
+
+        // Daily Expenses & Smart Coach Card
+        if (snapshot.dailyExpenses14d.isNotEmpty()) {
+            item {
+                DailyExpensesCoachCard(
+                    snapshot = snapshot,
+                    currency = cur,
+                    onTapTransaction = { editingTx = it },
+                    onLogExpense = { showAddDialog = true },
+                    onAskClaraAboutDailyExpenses = onAskClaraAboutDailyExpenses
+                )
             }
         }
 
@@ -1077,4 +1103,368 @@ private fun AddTransactionDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+}
+
+@Composable
+private fun DailyExpensesCoachCard(
+    snapshot: ExecutiveSnapshot,
+    currency: String,
+    onTapTransaction: (TransactionRecord) -> Unit,
+    onLogExpense: () -> Unit,
+    onAskClaraAboutDailyExpenses: () -> Unit
+) {
+    val all14 = snapshot.dailyExpenses14d
+    if (all14.isEmpty()) return
+
+    val defaultDateIso = remember(all14) {
+        val todayRec = all14.lastOrNull()
+        if (todayRec != null && todayRec.totalSpend > 0.0) {
+            todayRec.dateIso
+        } else {
+            all14.lastOrNull { it.totalSpend > 0.0 }?.dateIso ?: todayRec?.dateIso.orEmpty()
+        }
+    }
+    var selectedDateIso by remember(defaultDateIso) { mutableStateOf(defaultDateIso) }
+    val selectedDay = all14.firstOrNull { it.dateIso == selectedDateIso } ?: all14.last()
+    val last7 = all14.takeLast(7)
+    val dailyCap = snapshot.dailyBudgetAllowance
+
+    val statusColor = when (selectedDay.status) {
+        DailySpendStatus.NO_SPEND, DailySpendStatus.UNDER_BUDGET -> EmeraldAccent
+        DailySpendStatus.WATCH -> AccentGold
+        DailySpendStatus.OVER_BUDGET -> CoralAccent
+    }
+
+    ExecutiveCard(
+        borderColor = if (dailyCap > 0.0 && snapshot.avgDailySpend7d > dailyCap * 1.15) {
+            CoralAccent.copy(alpha = 0.45f)
+        } else {
+            EmeraldAccent.copy(alpha = 0.4f)
+        }
+    ) {
+        // Header
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                Text(
+                    text = "Daily Expenses & Coach",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "Cap ${currency} ${String.format(Locale.US, "%,.0f", dailyCap)}/d · 7d avg ${currency} ${String.format(Locale.US, "%,.0f", snapshot.avgDailySpend7d)}/d",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            OutlinedButton(
+                onClick = onLogExpense,
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Log", maxLines = 1, softWrap = false)
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        // Interactive 7-day bar chart with dashed Daily Cap guide line (sqrt-scaled so spike days don't flatten normal days)
+        val chartMaxSqrt = remember(last7, dailyCap) {
+            val peak = last7.maxOfOrNull { it.totalSpend } ?: 0.0
+            sqrt(maxOf(peak, dailyCap * 1.25, 100.0))
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(126.dp)
+        ) {
+            if (dailyCap > 0.0) {
+                val capRatio = (sqrt(dailyCap) / chartMaxSqrt).toFloat().coerceIn(0.10f, 0.90f)
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 20.dp, bottom = 26.dp)
+                        .fillMaxHeight()
+                ) {
+                    val y = size.height * (1f - capRatio)
+                    drawLine(
+                        color = AccentGold.copy(alpha = 0.65f),
+                        start = Offset(0f, y),
+                        end = Offset(size.width, y),
+                        strokeWidth = 2.5f,
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f)
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                last7.forEach { day ->
+                    val isSelected = day.dateIso == selectedDay.dateIso
+                    val barColor = when (day.status) {
+                        DailySpendStatus.NO_SPEND -> CardBorder
+                        DailySpendStatus.UNDER_BUDGET -> EmeraldAccent
+                        DailySpendStatus.WATCH -> AccentGold
+                        DailySpendStatus.OVER_BUDGET -> CoralAccent
+                    }
+                    val fraction = if (day.totalSpend <= 0.0) {
+                        0.06f
+                    } else {
+                        (sqrt(day.totalSpend) / chartMaxSqrt).toFloat().coerceIn(0.10f, 1f)
+                    }
+                    Surface(
+                        onClick = { selectedDateIso = day.dateIso },
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isSelected) AccentGold.copy(alpha = 0.14f) else ObsidianBg.copy(alpha = 0.0f),
+                        border = if (isSelected) BorderStroke(1.dp, AccentGold.copy(alpha = 0.7f)) else null,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 2.dp, vertical = 4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Bottom
+                        ) {
+                            Text(
+                                text = compactAmountLabel(day.totalSpend),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isSelected) AccentGold else TextMuted,
+                                maxLines = 1,
+                                softWrap = false,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth(),
+                                contentAlignment = Alignment.BottomCenter
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(0.56f)
+                                        .fillMaxHeight(fraction)
+                                        .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                                        .background(barColor)
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = day.dayShortLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isSelected) TextPrimary else TextMuted,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Scrollable 14-day selector strip (newest first)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            all14.reversed().forEach { day ->
+                val isSelected = day.dateIso == selectedDay.dateIso
+                val chipLabel = when (day.dayShortLabel) {
+                    "Today" -> "Today"
+                    "Yest" -> "Yest"
+                    else -> day.dateIso.takeLast(5)
+                }
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { selectedDateIso = day.dateIso },
+                    label = {
+                        Text(
+                            text = if (day.totalSpend > 0.0) "$chipLabel · ${compactAmountLabel(day.totalSpend)}" else chipLabel,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                )
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        // Selected Day Breakdown Panel
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = CardSurfaceElevated,
+            border = BorderStroke(1.dp, statusColor.copy(alpha = 0.4f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text(
+                            text = "${selectedDay.dateIso} (${selectedDay.dayShortLabel})",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${selectedDay.status.label} · ${selectedDay.txCount} expense${if (selectedDay.txCount == 1) "" else "s"}" +
+                                if (selectedDay.totalIncome > 0.0) " · +${ExecutiveAnalyticsEngine.formatMoney(currency, selectedDay.totalIncome)}" else "",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = statusColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        text = ExecutiveAnalyticsEngine.formatMoney(currency, selectedDay.totalSpend),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (selectedDay.totalSpend > 0.0) CoralAccent else EmeraldAccent,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                if (selectedDay.advice.isNotBlank()) {
+                    Text(
+                        text = selectedDay.advice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                }
+
+                if (selectedDay.transactions.isNotEmpty()) {
+                    HorizontalDivider(color = CardBorder)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        selectedDay.transactions.take(6).forEach { tx ->
+                            val isUncat = tx.category.equals("Uncategorized", ignoreCase = true)
+                            val isDebit = tx.debit > 0.0
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onTapTransaction(tx) }
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                    Text(
+                                        text = tx.normalizedDescription.ifBlank { "(No description)" },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextPrimary,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = if (isUncat) "${tx.category} · Tap to label" else tx.category,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isUncat) AccentGold else TextMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Text(
+                                    text = if (isDebit) {
+                                        "-${ExecutiveAnalyticsEngine.formatMoney(currency, tx.debit)}"
+                                    } else {
+                                        "+${ExecutiveAnalyticsEngine.formatMoney(currency, tx.credit)}"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isDebit) CoralAccent else EmeraldAccent,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                        if (selectedDay.transactions.size > 6) {
+                            Text(
+                                text = "+${selectedDay.transactions.size - 6} more in Deduplicated Ledger below",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Personalized Daily Suggestions Panel
+        if (snapshot.dailyCoachingHeadline.isNotBlank() || snapshot.dailyCoachingSuggestions.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "DAILY EXPENSE SUGGESTIONS",
+                style = MaterialTheme.typography.labelSmall,
+                color = AccentGold,
+                fontWeight = FontWeight.SemiBold
+            )
+            if (snapshot.dailyCoachingHeadline.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = snapshot.dailyCoachingHeadline,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                snapshot.dailyCoachingSuggestions.take(3).forEach { tip ->
+                    Text(
+                        text = "• $tip",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = onAskClaraAboutDailyExpenses,
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = AccentGold, contentColor = ObsidianBg),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Ask Clara for Daily Plan", maxLines = 1, softWrap = false, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+private fun compactAmountLabel(amount: Double): String {
+    return when {
+        amount <= 0.0 -> "0"
+        amount >= 100_000.0 -> String.format(Locale.US, "%.0fk", amount / 1000.0)
+        amount >= 10_000.0 -> String.format(Locale.US, "%.0fk", amount / 1000.0)
+        amount >= 1_000.0 -> String.format(Locale.US, "%.1fk", amount / 1000.0)
+        else -> amount.toInt().toString()
+    }
 }

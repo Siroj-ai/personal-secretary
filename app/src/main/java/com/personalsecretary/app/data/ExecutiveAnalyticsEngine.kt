@@ -4,6 +4,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -99,6 +100,40 @@ object ExecutiveAnalyticsEngine {
         val emergencyBuffer = maxOf(profile.monthlySpendBudget, 35000.0)
         val investableSurplus = DayBookParserAndHygiene.round2(
             (debitBalance - abs(creditBalance) - emergencyBuffer).coerceAtLeast(0.0)
+        )
+
+        // Daily Expense Analytics & Personalized Daily Coaching (14-day window)
+        val daysInMonth = today.lengthOfMonth().coerceAtLeast(28)
+        val dailyBudgetAllowance = DayBookParserAndHygiene.round2(
+            (profile.monthlySpendBudget / daysInMonth.toDouble()).coerceAtLeast(0.0)
+        )
+        val remainingDaysInMonth = (daysInMonth - today.dayOfMonth + 1).coerceAtLeast(1)
+        val remainingSafeDailyCap = DayBookParserAndHygiene.round2(
+            ((profile.monthlySpendBudget - currentMonthExpense) / remainingDaysInMonth.toDouble()).coerceAtLeast(0.0)
+        )
+        val dailyExpenses14d = buildDailyExpenses14d(
+            transactions = transactions,
+            dailyCap = dailyBudgetAllowance,
+            currency = profile.currencySymbol,
+            today = today
+        )
+        val last7DaysExpenses = dailyExpenses14d.takeLast(7)
+        val activeSpendDays7d = last7DaysExpenses.filter { it.totalSpend > 0.0 }
+        val avgDailySpend7d = if (last7DaysExpenses.isNotEmpty()) {
+            DayBookParserAndHygiene.round2(last7DaysExpenses.sumOf { it.totalSpend } / last7DaysExpenses.size.toDouble())
+        } else 0.0
+        val (dailyHeadline, dailySuggestions) = buildDailyCoaching(
+            dailyExpenses7d = last7DaysExpenses,
+            activeSpendDays7d = activeSpendDays7d,
+            todaySpend = todaySpend,
+            yesterdaySpend = yesterdaySpend,
+            dailyCap = dailyBudgetAllowance,
+            remainingSafeCap = remainingSafeDailyCap,
+            avgDailySpend7d = avgDailySpend7d,
+            tobaccoAlcohol7d = tobaccoAlcohol7d,
+            uncategorizedRecentCount = uncategorizedRecentCount,
+            investableSurplus = investableSurplus,
+            currency = profile.currencySymbol
         )
         val topCategories = catMap.entries
             .sortedByDescending { it.value.first }
@@ -235,8 +270,14 @@ object ExecutiveAnalyticsEngine {
             last30DaysIncome = last30Income,
             last30DaysExpense = last30Expense,
             dailyBurnRate30d = dailyBurn30d,
+            dailyBudgetAllowance = dailyBudgetAllowance,
+            remainingSafeDailyCap = remainingSafeDailyCap,
+            avgDailySpend7d = avgDailySpend7d,
             todaySpend = todaySpend,
             yesterdaySpend = yesterdaySpend,
+            dailyExpenses14d = dailyExpenses14d,
+            dailyCoachingHeadline = dailyHeadline,
+            dailyCoachingSuggestions = dailySuggestions,
             budgetUsedPercent = budgetUsedPct,
             tobaccoAlcohol7d = tobaccoAlcohol7d,
             tobaccoAlcohol30d = DayBookParserAndHygiene.round2(tobaccoAlcohol30d),
@@ -268,6 +309,159 @@ object ExecutiveAnalyticsEngine {
             urgentEmailsCount = urgentEmailsCount,
             insights = insights
         )
+    }
+
+    private fun buildDailyExpenses14d(
+        transactions: List<TransactionRecord>,
+        dailyCap: Double,
+        currency: String,
+        today: LocalDate
+    ): List<DailyExpenseSummary> {
+        val byDate = transactions
+            .filter { it.dateIso != "0000-00-00" }
+            .groupBy { it.dateIso }
+
+        return (13L downTo 0L).map { offset ->
+            val date = today.minusDays(offset)
+            val dateIso = date.format(isoFmt)
+            val dayLabel = when (offset) {
+                0L -> "Today"
+                1L -> "Yest"
+                else -> date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.US)
+            }
+            val dayRows = byDate[dateIso].orEmpty()
+            val debitRows = dayRows.filter { it.debit > 0.0 }
+            val totalSpend = DayBookParserAndHygiene.round2(debitRows.sumOf { it.debit })
+            val totalIncome = DayBookParserAndHygiene.round2(dayRows.sumOf { it.credit })
+            val topCategory = debitRows
+                .groupBy { it.category.ifBlank { "Uncategorized" } }
+                .maxByOrNull { (_, list) -> list.sumOf { it.debit } }
+                ?.key
+                .orEmpty()
+            val tobaccoSpend = DayBookParserAndHygiene.round2(
+                debitRows.filter { it.category.equals("Tobacco & Alcohol", ignoreCase = true) }.sumOf { it.debit }
+            )
+            val uncatCount = dayRows.count {
+                it.category.equals("Uncategorized", ignoreCase = true) && (it.debit > 0.0 || it.credit > 0.0)
+            }
+
+            val status = when {
+                totalSpend <= 0.0 -> DailySpendStatus.NO_SPEND
+                dailyCap <= 0.0 -> DailySpendStatus.UNDER_BUDGET
+                totalSpend > dailyCap * 1.25 -> DailySpendStatus.OVER_BUDGET
+                totalSpend > dailyCap * 0.85 -> DailySpendStatus.WATCH
+                else -> DailySpendStatus.UNDER_BUDGET
+            }
+
+            val advice = when {
+                totalSpend <= 0.0 && offset == 0L ->
+                    if (dailyCap > 0.0) {
+                        "No expenses logged today yet — aim to stay under ${formatMoney(currency, dailyCap)} or tap + Log for cash/QR spends."
+                    } else {
+                        "No expenses logged today yet. Tap + Log if you paid via cash or QR."
+                    }
+                totalSpend <= 0.0 ->
+                    "Zero-spend day — strong cash preservation toward your savings & IPO buffer."
+                tobaccoSpend > 0.0 -> {
+                    val monthlyProj = DayBookParserAndHygiene.round2(tobaccoSpend * 15.0)
+                    "Included ${formatMoney(currency, tobaccoSpend)} on Tobacco & Alcohol. Skipping habit days frees ~${formatMoney(currency, monthlyProj)}/mo for investments."
+                }
+                status == DailySpendStatus.OVER_BUDGET -> {
+                    val overBy = DayBookParserAndHygiene.round2((totalSpend - dailyCap).coerceAtLeast(0.0))
+                    val driver = if (topCategory.isNotBlank()) " (top driver: $topCategory)" else ""
+                    "Exceeded daily cap by ${formatMoney(currency, overBy)}$driver — balance with a low-spend reset day."
+                }
+                uncatCount > 0 ->
+                    "$uncatCount uncategorized entr${if (uncatCount == 1) "y" else "ies"} on this day — tap below to label what it was for."
+                status == DailySpendStatus.WATCH ->
+                    "Close to your ${formatMoney(currency, dailyCap)} daily cap — pause impulse or discretionary add-ons."
+                else -> {
+                    val saved = DayBookParserAndHygiene.round2((dailyCap - totalSpend).coerceAtLeast(0.0))
+                    if (saved > 0.0) {
+                        "Under daily cap by ${formatMoney(currency, saved)} — disciplined pace."
+                    } else {
+                        "Steady daily spending pace."
+                    }
+                }
+            }
+
+            DailyExpenseSummary(
+                dateIso = dateIso,
+                dayShortLabel = dayLabel,
+                totalSpend = totalSpend,
+                totalIncome = totalIncome,
+                txCount = debitRows.size,
+                topCategory = topCategory,
+                tobaccoAlcoholSpend = tobaccoSpend,
+                uncategorizedCount = uncatCount,
+                status = status,
+                advice = advice,
+                transactions = dayRows.reversed()
+            )
+        }
+    }
+
+    private fun buildDailyCoaching(
+        dailyExpenses7d: List<DailyExpenseSummary>,
+        activeSpendDays7d: List<DailyExpenseSummary>,
+        todaySpend: Double,
+        yesterdaySpend: Double,
+        dailyCap: Double,
+        remainingSafeCap: Double,
+        avgDailySpend7d: Double,
+        tobaccoAlcohol7d: Double,
+        uncategorizedRecentCount: Int,
+        investableSurplus: Double,
+        currency: String
+    ): Pair<String, List<String>> {
+        val suggestions = mutableListOf<String>()
+        val overCapDays = dailyExpenses7d.count { it.status == DailySpendStatus.OVER_BUDGET }
+        val zeroDays = dailyExpenses7d.count { it.status == DailySpendStatus.NO_SPEND }
+        val peakDay = activeSpendDays7d.maxByOrNull { it.totalSpend }
+
+        val headline = when {
+            activeSpendDays7d.isEmpty() ->
+                "No expenses recorded in the last 7 days — sync your Day Book or tap + Log to track daily outflows."
+            dailyCap > 0.0 && todaySpend > dailyCap * 1.2 ->
+                "Today's spend (${formatMoney(currency, todaySpend)}) is above your ${formatMoney(currency, dailyCap)}/day cap — freeze discretionary outlays."
+            dailyCap > 0.0 && avgDailySpend7d > dailyCap * 1.15 ->
+                "7-day pace is ${formatMoney(currency, avgDailySpend7d)}/day vs. your ${formatMoney(currency, dailyCap)}/day target ($overCapDays spike day${if (overCapDays == 1) "" else "s"})."
+            yesterdaySpend > 0.0 && dailyCap > 0.0 && yesterdaySpend <= dailyCap ->
+                "Yesterday (${formatMoney(currency, yesterdaySpend)}) stayed under your ${formatMoney(currency, dailyCap)}/day target — keep the streak going today."
+            else ->
+                "7-day daily average is ${formatMoney(currency, avgDailySpend7d)}/day across ${activeSpendDays7d.size} active spending day${if (activeSpendDays7d.size == 1) "" else "s"}."
+        }
+
+        if (dailyCap > 0.0) {
+            if (remainingSafeCap <= 0.0) {
+                suggestions += "Monthly budget is exhausted — switch to strict essentials-only days until next month's cycle resets."
+            } else if (avgDailySpend7d > dailyCap) {
+                val trimPerDay = DayBookParserAndHygiene.round2(avgDailySpend7d - dailyCap)
+                suggestions += "Trim ~${formatMoney(currency, trimPerDay)}/day (staying under ${formatMoney(currency, remainingSafeCap)}/day for remaining days) to bring your month back on target."
+            } else {
+                val headroomToday = DayBookParserAndHygiene.round2((dailyCap - todaySpend).coerceAtLeast(0.0))
+                suggestions += "Safe spending headroom left for today: ${formatMoney(currency, headroomToday)} (7-day avg ${formatMoney(currency, avgDailySpend7d)}/day)."
+            }
+        }
+
+        if (tobaccoAlcohol7d > 0.0) {
+            val habitDays = dailyExpenses7d.count { it.tobaccoAlcoholSpend > 0.0 }
+            val monthlySavings = DayBookParserAndHygiene.round2((tobaccoAlcohol7d / 7.0) * 30.0 * 0.5)
+            suggestions += "Tobacco & Alcohol showed up on $habitDays of the last 7 days (${formatMoney(currency, tobaccoAlcohol7d)}). Cutting in half saves ~${formatMoney(currency, monthlySavings)}/month."
+        }
+
+        if (peakDay != null && dailyCap > 0.0 && peakDay.totalSpend > dailyCap * 1.25) {
+            val topCat = peakDay.topCategory.ifBlank { "Uncategorized" }
+            suggestions += "Biggest spike this week was ${peakDay.dateIso} (${formatMoney(currency, peakDay.totalSpend)}, led by $topCat) — review if it was one-off or recurring."
+        }
+
+        if (uncategorizedRecentCount > 0) {
+            suggestions += "$uncategorizedRecentCount recent entries are still Uncategorized — tap any gold row to label it so daily suggestions get sharper."
+        } else if (zeroDays >= 2 && investableSurplus >= 2000.0) {
+            suggestions += "$zeroDays zero-spend days in the past week! Channel surplus cash (${formatMoney(currency, investableSurplus)}) into open Nepal IPOs or liquid NEPSE picks."
+        }
+
+        return headline to suggestions.take(4)
     }
 
     private fun buildInsights(
@@ -563,6 +757,7 @@ object ExecutiveAnalyticsEngine {
         }
         sb.appendLine("- Active Month (${snapshot.currentMonthKey}): Income ${formatMoney(c, snapshot.currentMonthIncome)}, Expense ${formatMoney(c, snapshot.currentMonthExpense)} (${snapshot.budgetUsedPercent}% of ${formatMoney(c, profile.monthlySpendBudget)} budget)")
         sb.appendLine("- Rolling 30-Day: Income ${formatMoney(c, snapshot.last30DaysIncome)}, Expense ${formatMoney(c, snapshot.last30DaysExpense)}, Daily Burn ${formatMoney(c, snapshot.dailyBurnRate30d)}/day")
+        sb.appendLine("- Daily Cap: ${formatMoney(c, snapshot.dailyBudgetAllowance)}/day | 7d Avg: ${formatMoney(c, snapshot.avgDailySpend7d)}/day | Coach: ${snapshot.dailyCoachingHeadline}")
         if (snapshot.tobaccoAlcohol7d > 0 || snapshot.tobaccoAlcohol30d > 0) {
             sb.appendLine("- Tobacco & Alcohol: 7d ${formatMoney(c, snapshot.tobaccoAlcohol7d)} | 30d ${formatMoney(c, snapshot.tobaccoAlcohol30d)}")
         }
@@ -806,6 +1001,28 @@ object ExecutiveAnalyticsEngine {
         val q = userQuery.lowercase(Locale.US)
         val c = profile.currencySymbol
         return when {
+            q.contains("daily expense") || q.contains("daily spend") || q.contains("day by day") || q.contains("daily plan") -> {
+                val recent7 = snapshot.dailyExpenses14d.takeLast(7).reversed()
+                val dayLines = recent7.joinToString("\n") { d ->
+                    val catHint = if (d.topCategory.isNotBlank()) " · ${d.topCategory}" else ""
+                    "• ${d.dateIso} (${d.dayShortLabel}): ${formatMoney(c, d.totalSpend)} [${d.status.label}]$catHint"
+                }
+                val adviceLines = snapshot.dailyCoachingSuggestions.joinToString("\n") { "• $it" }
+                buildString {
+                    appendLine("Daily Expense Coach (Target ${formatMoney(c, snapshot.dailyBudgetAllowance)}/day · 7d Avg ${formatMoney(c, snapshot.avgDailySpend7d)}/day):")
+                    if (snapshot.dailyCoachingHeadline.isNotBlank()) {
+                        appendLine(snapshot.dailyCoachingHeadline)
+                    }
+                    appendLine()
+                    appendLine("Last 7 Days:")
+                    appendLine(dayLines)
+                    if (adviceLines.isNotBlank()) {
+                        appendLine()
+                        appendLine("Suggestions:")
+                        append(adviceLines)
+                    }
+                }.trim()
+            }
             q.contains("yesterday") || q.contains("today's spend") || q.contains("spent today") || q.contains("spend today") -> {
                 val targetDate = if (q.contains("yesterday")) today.minusDays(1) else today
                 val targetIso = targetDate.format(isoFmt)

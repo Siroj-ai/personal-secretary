@@ -141,6 +141,9 @@ class DailyBriefingWorker(
         if (snapshot.tobaccoAlcohol7d >= 200.0 || snapshot.tobaccoAlcohol30d >= 1200.0) {
             parts += "Tobacco & Alcohol hit ${ExecutiveAnalyticsEngine.formatMoney(cur, snapshot.tobaccoAlcohol7d)} (7d) / ${ExecutiveAnalyticsEngine.formatMoney(cur, snapshot.tobaccoAlcohol30d)} (30d) — cutting back 40% frees cash for IPOs."
         }
+        if (snapshot.dailyBudgetAllowance > 0.0 && snapshot.avgDailySpend7d > snapshot.dailyBudgetAllowance * 1.15) {
+            parts += "7-day daily avg is ${ExecutiveAnalyticsEngine.formatMoney(cur, snapshot.avgDailySpend7d)}/day vs. your ${ExecutiveAnalyticsEngine.formatMoney(cur, snapshot.dailyBudgetAllowance)}/day cap — aim for a low-spend reset day."
+        }
         if (snapshot.budgetUsedPercent >= 85.0 && snapshot.currentMonthExpense > 0.0) {
             parts += "Active month spend is at ${snapshot.budgetUsedPercent.toInt()}% of your ${ExecutiveAnalyticsEngine.formatMoney(cur, profile.monthlySpendBudget)} budget — pause non-essential outflows."
         }

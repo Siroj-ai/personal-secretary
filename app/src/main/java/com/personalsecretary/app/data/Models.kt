@@ -314,6 +314,27 @@ data class CategorySpend(
     val sharePercent: Double
 )
 
+enum class DailySpendStatus(val label: String) {
+    NO_SPEND("Zero Spend"),
+    UNDER_BUDGET("On Track"),
+    WATCH("Watch Pace"),
+    OVER_BUDGET("Over Cap")
+}
+
+data class DailyExpenseSummary(
+    val dateIso: String,
+    val dayShortLabel: String,
+    val totalSpend: Double,
+    val totalIncome: Double,
+    val txCount: Int,
+    val topCategory: String = "",
+    val tobaccoAlcoholSpend: Double = 0.0,
+    val uncategorizedCount: Int = 0,
+    val status: DailySpendStatus = DailySpendStatus.NO_SPEND,
+    val advice: String = "",
+    val transactions: List<TransactionRecord> = emptyList()
+)
+
 enum class InsightSeverity {
     POSITIVE,
     INFO,
@@ -350,8 +371,14 @@ data class ExecutiveSnapshot(
     val last30DaysIncome: Double = 0.0,
     val last30DaysExpense: Double = 0.0,
     val dailyBurnRate30d: Double = 0.0,
+    val dailyBudgetAllowance: Double = 0.0,
+    val remainingSafeDailyCap: Double = 0.0,
+    val avgDailySpend7d: Double = 0.0,
     val todaySpend: Double = 0.0,
     val yesterdaySpend: Double = 0.0,
+    val dailyExpenses14d: List<DailyExpenseSummary> = emptyList(),
+    val dailyCoachingHeadline: String = "",
+    val dailyCoachingSuggestions: List<String> = emptyList(),
     val budgetUsedPercent: Double = 0.0,
     val tobaccoAlcohol7d: Double = 0.0,
     val tobaccoAlcohol30d: Double = 0.0,
