@@ -83,6 +83,8 @@ fun AdvisorScreen(
 
     val quickPrompts = remember {
         listOf(
+            "What was my spending yesterday?",
+            "Suggest Nepal IPOs & NEPSE shares",
             "Summarize my recent emails",
             "Brief my schedule & work today",
             "Full financial & health audit",

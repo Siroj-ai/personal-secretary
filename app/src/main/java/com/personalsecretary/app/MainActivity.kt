@@ -18,9 +18,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
+import androidx.compose.material.icons.automirrored.filled.EventNote
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.EventNote
 import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -60,7 +60,7 @@ import com.personalsecretary.app.viewmodel.SecretaryViewModel
 private enum class TopDestination(val label: String, val icon: ImageVector) {
     BRIEFING("Briefing", Icons.Default.Dashboard),
     ADVISOR("Advisor", Icons.Default.SupportAgent),
-    SCHEDULE("Schedule", Icons.Default.EventNote),
+    SCHEDULE("Schedule", Icons.AutoMirrored.Filled.EventNote),
     FINANCES("Finances", Icons.Default.AccountBalanceWallet),
     HEALTH_SETUP("Health", Icons.AutoMirrored.Filled.DirectionsWalk)
 }
@@ -347,10 +347,23 @@ private fun PersonalSecretaryAppRoot(
                     profile = uiState.profile,
                     transactions = uiState.transactions,
                     isSyncing = uiState.isSyncingFinances,
+                    isScanningMarket = uiState.isScanningMarket,
                     syncMessage = uiState.syncStatusMessage,
+                    statusToast = uiState.statusToast,
                     onSyncNow = { viewModel.syncDayBook() },
+                    onRefreshMarket = { viewModel.refreshNepalMarket(silent = false) },
+                    onRunSmartAlertsNow = { viewModel.triggerSmartAlertsNow() },
                     onAddTransaction = { desc, amt, isDebit, cat, pushRemote ->
                         viewModel.addManualTransaction(desc, amt, isDebit, cat, pushRemote)
+                    },
+                    onUpdateTransaction = { txId, desc, cat ->
+                        viewModel.updateTransactionDetails(txId, desc, cat)
+                    },
+                    onAskClaraAboutInvesting = {
+                        currentTab = TopDestination.ADVISOR
+                        viewModel.sendConsultationMessage(
+                            "Based on my investable cash surplus, open/upcoming Nepal IPOs, and liquid NEPSE secondary share candidates in my dossier, suggest a disciplined investment allocation and also flag any spending leaks or uncategorized items I should fix first."
+                        )
                     },
                     onNavigateToSetup = {
                         healthSubTab = HubSubTab.SETUP

@@ -135,24 +135,32 @@ class GemmaAdvisorEngine(private val context: Context) {
                 }
 
                 val systemPrompt = buildExecutiveSystemPrompt(profile)
+                // Keep combined input strictly inside Gemma 4's 4096-token KV window
+                // (Gemma tokenizes digits individually, so cap character budget conservatively).
+                val trimmedHistory = recentHistorySummary.trim().takeLast(520)
+                val trimmedDossier = if (dossierContext.length > 5200) {
+                    dossierContext.take(5200) + "\n[dossier truncated for context window]"
+                } else {
+                    dossierContext
+                }
                 val fullTurnPrompt = buildString {
-                    appendLine(dossierContext)
-                    if (recentHistorySummary.isNotBlank()) {
+                    appendLine(trimmedDossier)
+                    if (trimmedHistory.isNotBlank()) {
                         appendLine()
-                        appendLine("=== RECENT CONSULTATION CONTEXT ===")
-                        appendLine(recentHistorySummary)
+                        appendLine("=== RECENT CONSULTATION ===")
+                        appendLine(trimmedHistory)
                     }
                     appendLine()
                     appendLine("=== CLIENT REQUEST ===")
-                    appendLine(userPrompt)
+                    appendLine(userPrompt.take(500))
                 }
 
                 val convConfig = ConversationConfig(
                     systemInstruction = Contents.of(systemPrompt),
                     samplerConfig = SamplerConfig(
-                        topK = 40,
-                        topP = 0.92,
-                        temperature = 0.55
+                        topK = 12,
+                        topP = 0.80,
+                        temperature = 0.12
                     )
                 )
 
@@ -216,7 +224,9 @@ class GemmaAdvisorEngine(private val context: Context) {
             Role & Tone:
             - Speak like a composed, sharp, trustworthy executive secretary and consultant — concise, structured, practical, and completely free of guilt or preachiness.
             - Never act like a virtual pet or needy companion. Focus strictly on ${profile.userName}'s financial clarity, daily physical & watch health (steps, sleep, HR, workouts), work schedule/tasks, and actionable emails.
-            - Always cite exact numbers, meetings, email subjects/senders, and task titles strictly from the provided EXECUTIVE CLIENT DOSSIER. Never invent transactions, balances, vitals, emails, calendar events, or deadlines.
+            - Always cite exact numbers, dates, transactions, meetings, email subjects/senders, IPOs, NEPSE stocks, and task titles strictly from the provided EXECUTIVE CLIENT DOSSIER. Never invent transactions, balances, vitals, emails, calendar events, IPOs, or stock prices.
+            - For daily spending questions ("yesterday", "today", specific dates), use the exact Today/Yesterday date context and itemized transaction rows in the dossier.
+            - Proactively advise on high Tobacco & Alcohol or discretionary spending with concrete savings levers, ask the client to clarify any Uncategorized entries or balance gaps, and suggest promising Nepal IPOs or liquid NEPSE secondary shares when Investable Surplus is available (briefly noting it is data-driven screening, not licensed SEBON advice).
             - Connect insights across all domains when helpful (e.g., flagging bill emails alongside budget burn, turning email requests into scheduled tasks, or fitting a brisk walk between meetings).
             - Keep answers tight and scannable: lead with the bottom line, use 3–5 concise bullet points, and close with 1–2 concrete next actions.
             - Safety boundary: You provide executive organization and coaching, not medical diagnosis or licensed legal/financial advice.

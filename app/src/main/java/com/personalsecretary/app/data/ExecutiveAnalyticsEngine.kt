@@ -28,6 +28,7 @@ object ExecutiveAnalyticsEngine {
         calendarEvents: List<CalendarEventItem> = emptyList(),
         tasks: List<SecretaryTask> = emptyList(),
         emailAlerts: List<EmailAlertItem> = emptyList(),
+        marketSnapshot: NepalMarketSnapshot = NepalMarketSnapshot(),
         nowMillis: Long = System.currentTimeMillis()
     ): ExecutiveSnapshot {
         val todayIso = today.format(isoFmt)
@@ -72,6 +73,33 @@ object ExecutiveAnalyticsEngine {
                 tobaccoAlcohol30d += tx.debit
             }
         }
+        val todaySpend = DayBookParserAndHygiene.round2(
+            debitTxns.filter { it.dateIso == todayIso }.sumOf { it.debit }
+        )
+        val yesterdaySpend = DayBookParserAndHygiene.round2(
+            debitTxns.filter { it.dateIso == yesterdayIso }.sumOf { it.debit }
+        )
+        val last7Start = today.minusDays(6).format(isoFmt)
+        val tobaccoAlcohol7d = DayBookParserAndHygiene.round2(
+            debitTxns.filter {
+                it.dateIso >= last7Start && it.dateIso != "0000-00-00" &&
+                    it.debit > 0.0 && it.category.equals("Tobacco & Alcohol", ignoreCase = true)
+            }.sumOf { it.debit }
+        )
+        val recent14Start = today.minusDays(13).format(isoFmt)
+        val uncategorizedRecent = debitTxns.filter {
+            it.dateIso >= recent14Start && it.dateIso != "0000-00-00" &&
+                it.category.equals("Uncategorized", ignoreCase = true) &&
+                (it.debit > 0.0 || it.credit > 0.0)
+        }
+        val uncategorizedRecentCount = uncategorizedRecent.size
+        val uncategorizedRecentAmount = DayBookParserAndHygiene.round2(
+            uncategorizedRecent.sumOf { if (it.debit > 0.0) it.debit else it.credit }
+        )
+        val emergencyBuffer = maxOf(profile.monthlySpendBudget, 35000.0)
+        val investableSurplus = DayBookParserAndHygiene.round2(
+            (debitBalance - abs(creditBalance) - emergencyBuffer).coerceAtLeast(0.0)
+        )
         val topCategories = catMap.entries
             .sortedByDescending { it.value.first }
             .take(6)
@@ -172,7 +200,13 @@ object ExecutiveAnalyticsEngine {
             ssf = ssf,
             currentMonthExpense = currentMonthExpense,
             last30Expense = last30Expense,
+            tobaccoAlcohol7d = tobaccoAlcohol7d,
             tobaccoAlcohol30d = DayBookParserAndHygiene.round2(tobaccoAlcohol30d),
+            uncategorizedRecentCount = uncategorizedRecentCount,
+            uncategorizedRecentAmount = uncategorizedRecentAmount,
+            latestUncategorizedSample = uncategorizedRecent.lastOrNull()?.normalizedDescription.orEmpty(),
+            investableSurplus = investableSurplus,
+            marketSnapshot = marketSnapshot,
             hygiene = hygiene,
             todaySteps = todayStepRec.steps,
             avgSteps7d = avgSteps7d,
@@ -201,8 +235,15 @@ object ExecutiveAnalyticsEngine {
             last30DaysIncome = last30Income,
             last30DaysExpense = last30Expense,
             dailyBurnRate30d = dailyBurn30d,
+            todaySpend = todaySpend,
+            yesterdaySpend = yesterdaySpend,
             budgetUsedPercent = budgetUsedPct,
+            tobaccoAlcohol7d = tobaccoAlcohol7d,
             tobaccoAlcohol30d = DayBookParserAndHygiene.round2(tobaccoAlcohol30d),
+            uncategorizedRecentCount = uncategorizedRecentCount,
+            uncategorizedRecentAmount = uncategorizedRecentAmount,
+            investableSurplus = investableSurplus,
+            marketSnapshot = marketSnapshot,
             topCategories30d = topCategories,
             monthlyCashFlows = monthlyFlows,
             hygieneReport = hygiene,
@@ -235,7 +276,13 @@ object ExecutiveAnalyticsEngine {
         ssf: SsfSummary,
         currentMonthExpense: Double,
         last30Expense: Double,
+        tobaccoAlcohol7d: Double,
         tobaccoAlcohol30d: Double,
+        uncategorizedRecentCount: Int,
+        uncategorizedRecentAmount: Double,
+        latestUncategorizedSample: String,
+        investableSurplus: Double,
+        marketSnapshot: NepalMarketSnapshot,
         hygiene: FinancialHygieneReport,
         todaySteps: Long,
         avgSteps7d: Long,
@@ -368,15 +415,65 @@ object ExecutiveAnalyticsEngine {
             }
         }
 
-        if (tobaccoAlcohol30d > 2000.0 && last30Expense > 0) {
+        if (tobaccoAlcohol7d >= 200.0 || tobaccoAlcohol30d >= 1200.0) {
+            val pctStr = if (last30Expense > 0) {
+                " (${String.format(Locale.US, "%.1f", (tobaccoAlcohol30d / last30Expense) * 100.0)}% of 30d outflow)"
+            } else ""
+            val annualSavings = DayBookParserAndHygiene.round2(maxOf(tobaccoAlcohol30d, tobaccoAlcohol7d * 4.0) * 0.4 * 12.0)
             list += ExecutiveInsight(
                 id = "habit_spend",
                 domain = InsightDomain.CROSS_DOMAIN,
                 severity = InsightSeverity.CAUTION,
-                title = "Tobacco & Alcohol Spend: ${formatMoney(cur, tobaccoAlcohol30d)} (30d)",
-                detail = "Habit spending represents ${String.format(Locale.US, "%.1f", (tobaccoAlcohol30d / last30Expense) * 100.0)}% of your 30-day debit outflow.",
-                recommendation = "Cutting this by 30% preserves ~${formatMoney(cur, tobaccoAlcohol30d * 0.3)}/month and directly supports stamina and walking recovery."
+                title = "Tobacco & Alcohol Alert: ${formatMoney(cur, tobaccoAlcohol30d)} (30d)",
+                detail = "Spent ${formatMoney(cur, tobaccoAlcohol7d)} in the last 7 days and ${formatMoney(cur, tobaccoAlcohol30d)} over 30 days$pctStr.",
+                recommendation = "Trimming this by 40% redirects ~${formatMoney(cur, annualSavings)}/year into IPOs or NEPSE shares while improving stamina."
             )
+        }
+
+        if (uncategorizedRecentCount > 0) {
+            val sampleHint = latestUncategorizedSample.takeIf { it.isNotBlank() }?.let { " (e.g. '$it')" }.orEmpty()
+            list += ExecutiveInsight(
+                id = "uncategorized_clarify",
+                domain = InsightDomain.FINANCIAL,
+                severity = InsightSeverity.INFO,
+                title = "$uncategorizedRecentCount Uncategorized Recent Entr${if (uncategorizedRecentCount == 1) "y" else "ies"} (${formatMoney(cur, uncategorizedRecentAmount)})",
+                detail = "Some recent entries$sampleHint lack clear descriptions or categories, which limits exact spending advice.",
+                recommendation = "Open Finances -> Uncategorized and tap any entry to label what it was for."
+            )
+        }
+
+        if (investableSurplus >= 2000.0 && marketSnapshot.hasMarketData) {
+            val generalOpen = marketSnapshot.openIpos.firstOrNull { it.isGeneralPublic }
+            val generalUpcoming = marketSnapshot.upcomingIpos.firstOrNull { it.isGeneralPublic }
+            val topStock = marketSnapshot.promisingStocks.firstOrNull()
+            val (title, detail, rec) = when {
+                generalOpen != null -> Triple(
+                    "Open Nepal IPO: ${generalOpen.companyName} (${generalOpen.stockSymbol})",
+                    "Investable surplus is ${formatMoney(cur, investableSurplus)} after Credit Card & monthly buffer. ${generalOpen.companyName} (${generalOpen.sectorName}) is Open until ${generalOpen.closingDateAd} (min ${formatMoney(cur, generalOpen.minInvestmentNpr)}).",
+                    "Review rating/prospectus in Finances -> IPO & NEPSE Radar and apply via MeroShare if it fits your risk profile."
+                )
+                generalUpcoming != null -> Triple(
+                    "Upcoming Nepal IPO: ${generalUpcoming.companyName} (${generalUpcoming.stockSymbol})",
+                    "You have ${formatMoney(cur, investableSurplus)} investable surplus. ${generalUpcoming.companyName} opens ${generalUpcoming.openingDateAd} (min ${formatMoney(cur, generalUpcoming.minInvestmentNpr)}${if (generalUpcoming.rating.isNotBlank()) " · ${generalUpcoming.rating}" else ""}).",
+                    "Keep ${formatMoney(cur, generalUpcoming.minInvestmentNpr)} parked in MeroShare/ASBA and review secondary picks in Finances."
+                )
+                topStock != null -> Triple(
+                    "Investable Surplus Ready: ${formatMoney(cur, investableSurplus)}",
+                    "Live NEPSE screen highlights ${topStock.symbol} (LTP ${formatMoney(cur, topStock.ltp)}, ${String.format(Locale.US, "%+.2f%%", topStock.percentChange)}, ${topStock.signalTag}).",
+                    "Open Finances -> IPO & NEPSE Radar or ask Clara for a disciplined SIP/secondary allocation plan."
+                )
+                else -> Triple("", "", "")
+            }
+            if (title.isNotBlank()) {
+                list += ExecutiveInsight(
+                    id = "nepal_ipo_opportunity",
+                    domain = InsightDomain.FINANCIAL,
+                    severity = InsightSeverity.POSITIVE,
+                    title = title,
+                    detail = detail,
+                    recommendation = rec
+                )
+            }
         }
 
         if (ssf.refundableAmount > 0 && ssf.totalDueAmount > 0) {
@@ -427,12 +524,17 @@ object ExecutiveAnalyticsEngine {
     fun buildGemmaDossier(
         snapshot: ExecutiveSnapshot,
         profile: SecretaryProfile,
-        recentTransactions: List<TransactionRecord>
+        recentTransactions: List<TransactionRecord>,
+        userQuery: String = "",
+        today: LocalDate = LocalDate.now()
     ): String {
         val c = profile.currencySymbol
+        val todayIso = today.format(isoFmt)
+        val yesterdayDate = today.minusDays(1)
+        val yesterdayIso = yesterdayDate.format(isoFmt)
         val sb = StringBuilder()
         sb.appendLine("=== EXECUTIVE CLIENT DOSSIER (LIVE VERIFIED METRICS) ===")
-        sb.appendLine("Client: ${profile.userName} | Currency: $c | Active Month: ${snapshot.currentMonthKey}")
+        sb.appendLine("Client: ${profile.userName} | Currency: $c | Today: $todayIso (${today.dayOfWeek}) | Yesterday: $yesterdayIso (${yesterdayDate.dayOfWeek}) | Active Month: ${snapshot.currentMonthKey}")
         sb.appendLine("Authoritative Targets: Monthly Spend Budget = ${formatMoney(c, profile.monthlySpendBudget)} | Daily Step Goal = ${profile.dailyStepGoal} steps")
         sb.appendLine("Financial Priorities: ${profile.financialGoals}")
         sb.appendLine("Physical Activity Priorities: ${profile.healthGoals}")
@@ -441,8 +543,7 @@ object ExecutiveAnalyticsEngine {
         }
         sb.appendLine()
         sb.appendLine("[1. FINANCIAL HEALTH - DAY BOOK (DEDUPLICATED)]")
-        sb.appendLine("- Liquid Debit Balance: ${formatMoney(c, snapshot.debitBalance)}")
-        sb.appendLine("- Credit Card Balance: ${formatMoney(c, snapshot.creditCardBalance)}")
+        sb.appendLine("- Liquid Debit Balance: ${formatMoney(c, snapshot.debitBalance)} | Credit Card: ${formatMoney(c, snapshot.creditCardBalance)} | Investable Surplus (after CC & monthly buffer): ${formatMoney(c, snapshot.investableSurplus)}")
         if (snapshot.ssfSummary.refundableAmount > 0) {
             val ssf = snapshot.ssfSummary
             sb.appendLine(
@@ -462,8 +563,8 @@ object ExecutiveAnalyticsEngine {
         }
         sb.appendLine("- Active Month (${snapshot.currentMonthKey}): Income ${formatMoney(c, snapshot.currentMonthIncome)}, Expense ${formatMoney(c, snapshot.currentMonthExpense)} (${snapshot.budgetUsedPercent}% of ${formatMoney(c, profile.monthlySpendBudget)} budget)")
         sb.appendLine("- Rolling 30-Day: Income ${formatMoney(c, snapshot.last30DaysIncome)}, Expense ${formatMoney(c, snapshot.last30DaysExpense)}, Daily Burn ${formatMoney(c, snapshot.dailyBurnRate30d)}/day")
-        if (snapshot.tobaccoAlcohol30d > 0) {
-            sb.appendLine("- Tobacco & Alcohol (30d): ${formatMoney(c, snapshot.tobaccoAlcohol30d)}")
+        if (snapshot.tobaccoAlcohol7d > 0 || snapshot.tobaccoAlcohol30d > 0) {
+            sb.appendLine("- Tobacco & Alcohol: 7d ${formatMoney(c, snapshot.tobaccoAlcohol7d)} | 30d ${formatMoney(c, snapshot.tobaccoAlcohol30d)}")
         }
         if (snapshot.topCategories30d.isNotEmpty()) {
             val cats = snapshot.topCategories30d.joinToString("; ") {
@@ -471,71 +572,168 @@ object ExecutiveAnalyticsEngine {
             }
             sb.appendLine("- Top Spend Categories (30d): $cats")
         }
-        if (snapshot.hygieneReport.duplicatesRemoved > 0 || snapshot.hygieneReport.balanceAnomalies.isNotEmpty()) {
-            sb.appendLine("- Data Hygiene: ${snapshot.hygieneReport.duplicatesRemoved} duplicate rows filtered; ${snapshot.hygieneReport.balanceAnomalies.size} balance gaps flagged.")
+        if (snapshot.hygieneReport.duplicatesRemoved > 0 || snapshot.hygieneReport.balanceAnomalies.isNotEmpty() || snapshot.uncategorizedRecentCount > 0) {
+            sb.appendLine("- Data Hygiene: ${snapshot.hygieneReport.duplicatesRemoved} duplicate rows filtered; ${snapshot.hygieneReport.balanceAnomalies.size} balance gaps flagged; ${snapshot.uncategorizedRecentCount} recent uncategorized entries (${formatMoney(c, snapshot.uncategorizedRecentAmount)}).")
         }
-        if (recentTransactions.isNotEmpty()) {
-            sb.appendLine("- Latest 6 Transactions:")
-            recentTransactions.takeLast(6).reversed().forEach { tx ->
-                val kind = if (tx.debit > 0) "Debit ${formatMoney(c, tx.debit)}" else "Credit ${formatMoney(c, tx.credit)}"
-                sb.appendLine("  * ${tx.dateIso} | ${tx.normalizedDescription.ifBlank { "(blank)" }} | $kind | Bal ${formatMoney(c, tx.balance)} | ${tx.category}")
+
+        // Chronological daily spending breakdown (fixes old Credit Card tail bug!)
+        val chronologicalDesc = recentTransactions
+            .withIndex()
+            .filter { it.value.dateIso != "0000-00-00" }
+            .sortedWith(compareByDescending<IndexedValue<TransactionRecord>> { it.value.dateIso }.thenByDescending { it.index })
+            .map { it.value }
+
+        val todayTxns = chronologicalDesc.filter { it.dateIso == todayIso }
+        val yesterdayTxns = chronologicalDesc.filter { it.dateIso == yesterdayIso }
+        sb.appendLine("- Today ($todayIso) Spending: ${formatMoney(c, snapshot.todaySpend)} (${todayTxns.size} txns)${if (todayTxns.isEmpty()) " — none synced yet" else ""}")
+        todayTxns.take(10).forEach { tx -> sb.appendLine(formatDossierTxnLine(tx, c)) }
+        sb.appendLine("- Yesterday ($yesterdayIso) Spending: ${formatMoney(c, snapshot.yesterdaySpend)} (${yesterdayTxns.size} txns)")
+        yesterdayTxns.take(10).forEach { tx -> sb.appendLine(formatDossierTxnLine(tx, c)) }
+
+        val last7DaysSummary = (0L..6L).mapNotNull { offset ->
+            val dIso = today.minusDays(offset).format(isoFmt)
+            val dayTxns = chronologicalDesc.filter { it.dateIso == dIso && it.accountType == AccountType.DEBIT }
+            if (dayTxns.isEmpty()) null else {
+                val spend = DayBookParserAndHygiene.round2(dayTxns.sumOf { it.debit })
+                val inc = DayBookParserAndHygiene.round2(dayTxns.sumOf { it.credit })
+                val incStr = if (inc > 0) "/+${inc.toInt()}" else ""
+                "${dIso.takeLast(5)}:${spend.toInt()}$incStr"
             }
         }
-        sb.appendLine()
-        sb.appendLine("[2. PHYSICAL HEALTH & WATCH VITALS (ONEPLUS 13 / HEALTH CONNECT)]")
-        sb.appendLine("- Today Steps: ${snapshot.todaySteps} / ${profile.dailyStepGoal} steps | ${String.format(Locale.US, "%.2f", snapshot.todayMetrics.distanceKm)} km | ${snapshot.todayMetrics.caloriesKcal} kcal | ${snapshot.todayMetrics.activeMinutes} active mins")
-        sb.appendLine("- 7-Day Total: ${snapshot.weeklyStepsTotal} | 7-Day Average: ${snapshot.avgSteps7d} steps/day | Goal Streak: ${snapshot.stepStreakDays} days")
-        snapshot.peakHourToday?.let { hr ->
-            sb.appendLine("- Peak Activity Hour Today: ${formatHourLabel(hr)}")
+        if (last7DaysSummary.isNotEmpty()) {
+            sb.appendLine("- Last 7d Daily Debit/Credit ($c): ${last7DaysSummary.joinToString(" | ")}")
         }
-        val stepSeries = snapshot.recentSteps7d.joinToString(", ") { "${it.dateIso.takeLast(5)}:${it.steps}" }
-        sb.appendLine("- Last 7 Days: $stepSeries")
+
+        val printedIds = (todayTxns.take(10) + yesterdayTxns.take(10)).map { it.id }.toMutableSet()
+        val recentEarlier = chronologicalDesc.filter { it.id !in printedIds }.take(10)
+        if (recentEarlier.isNotEmpty()) {
+            sb.appendLine("- Prior Recent Transactions (Newest First):")
+            recentEarlier.forEach { tx ->
+                printedIds += tx.id
+                sb.appendLine(formatDossierTxnLine(tx, c))
+            }
+        }
+
+        // Uncategorized entries needing user clarification (exclude already printed)
+        val recent14Start = today.minusDays(13).format(isoFmt)
+        val uncatRecent = chronologicalDesc
+            .filter { it.id !in printedIds && it.dateIso >= recent14Start && it.category.equals("Uncategorized", ignoreCase = true) }
+            .take(3)
+        if (uncatRecent.isNotEmpty()) {
+            sb.appendLine("- Uncategorized Entries to Clarify:")
+            uncatRecent.forEach { tx ->
+                printedIds += tx.id
+                sb.appendLine(formatDossierTxnLine(tx, c))
+            }
+        }
+
+        // Query-aware lookup across the full ledger so specific date/merchant/category questions always get exact rows
+        val matched = findQueryMatchedTransactions(chronologicalDesc, userQuery, alreadyIncluded = printedIds).take(6)
+        if (matched.isNotEmpty()) {
+            sb.appendLine("- Query-Matched Historical Entries:")
+            matched.forEach { tx -> sb.appendLine(formatDossierTxnLine(tx, c)) }
+        }
+        sb.appendLine()
+        sb.appendLine("[2. PHYSICAL HEALTH & WATCH VITALS]")
+        val peakStr = snapshot.peakHourToday?.let { " | Peak ${formatHourLabel(it)}" }.orEmpty()
+        sb.appendLine("- Today Steps: ${snapshot.todaySteps} / ${profile.dailyStepGoal} (${String.format(Locale.US, "%.2f", snapshot.todayMetrics.distanceKm)} km, ${snapshot.todayMetrics.caloriesKcal} kcal)$peakStr | 7d Avg: ${snapshot.avgSteps7d} | Streak: ${snapshot.stepStreakDays}d")
         val vitals = snapshot.healthVitals
         if (vitals.hasAnyWatchData) {
             val parts = buildList {
-                if (vitals.lastNightSleepMinutes > 0) add("Sleep last night ${formatDurationHoursMins(vitals.lastNightSleepMinutes)} (7d avg ${formatDurationHoursMins(vitals.avgSleepMinutes7d)})")
+                if (vitals.lastNightSleepMinutes > 0) add("Sleep ${formatDurationHoursMins(vitals.lastNightSleepMinutes)}")
                 vitals.restingHeartRateBpm?.let { add("Resting HR $it bpm") }
                 vitals.latestHeartRateBpm?.let { add("Latest HR $it bpm") }
                 vitals.latestSpo2Percent?.let { add("SpO2 ${String.format(Locale.US, "%.1f", it)}%") }
-                if (vitals.workoutsThisWeek > 0) add("Workouts 7d: ${vitals.workoutsThisWeek} (${vitals.workoutMinutesThisWeek} min)")
+                if (vitals.workoutsThisWeek > 0) add("Workouts 7d: ${vitals.workoutsThisWeek}")
             }
             sb.appendLine("- Watch Vitals: ${parts.joinToString(" | ")}")
         }
 
         sb.appendLine()
-        sb.appendLine("[3. SCHEDULE, MEETINGS & WORK TASKS]")
-        sb.appendLine("- Today's Calendar Events: ${snapshot.todayEvents.size} | Upcoming 7d Events: ${snapshot.upcomingEvents7d.size}")
-        snapshot.todayEvents.take(6).forEach { ev ->
-            val loc = if (ev.location.isNotBlank()) " @ ${ev.location}" else ""
-            sb.appendLine("  * Today ${formatEventTimeRange(ev)} | ${ev.title}$loc")
+        sb.appendLine("[3. SCHEDULE & TASKS]")
+        sb.appendLine("- Calendar Today: ${snapshot.todayEvents.size} | 7d: ${snapshot.upcomingEvents7d.size} | Pending Tasks: ${snapshot.pendingTasks.size} (Overdue: ${snapshot.overdueTasksCount})")
+        snapshot.todayEvents.take(4).forEach { ev ->
+            sb.appendLine("  * Today ${formatEventTimeRange(ev)} | ${ev.title.take(48)}")
         }
-        val futureEvents = snapshot.upcomingEvents7d.filter { ev -> snapshot.todayEvents.none { it.id == ev.id && it.startMillis == ev.startMillis } }
-        futureEvents.take(4).forEach { ev ->
-            sb.appendLine("  * Upcoming ${formatMillisDateTime(ev.startMillis)} | ${ev.title}")
-        }
-        sb.appendLine("- Pending Work & Personal Tasks: ${snapshot.pendingTasks.size} (Overdue: ${snapshot.overdueTasksCount}, Due Today: ${snapshot.dueTodayTasksCount})")
-        snapshot.pendingTasks.take(8).forEach { task ->
+        snapshot.pendingTasks.take(5).forEach { task ->
             val dueLbl = task.dueAtMillis?.let { formatMillisDateTime(it) } ?: "No deadline"
-            sb.appendLine("  * [${task.priority.label}/${task.category.label}] ${task.title} (Due: $dueLbl)")
+            sb.appendLine("  * [${task.priority.label}] ${task.title.take(48)} ($dueLbl)")
         }
 
         if (snapshot.recentEmails.isNotEmpty()) {
             sb.appendLine()
-            sb.appendLine("[4. RECENT EMAIL ALERTS (ON-DEVICE NOTIFICATION INBOX)]")
-            sb.appendLine("- Captured Emails: ${snapshot.recentEmails.size} | Unread: ${snapshot.unreadEmailsCount} | Urgent: ${snapshot.urgentEmailsCount}")
-            snapshot.recentEmails.take(8).forEach { mail ->
+            sb.appendLine("[4. RECENT EMAIL ALERTS (${snapshot.unreadEmailsCount} unread, ${snapshot.urgentEmailsCount} urgent)]")
+            snapshot.recentEmails.take(5).forEach { mail ->
                 val stateLbl = if (mail.isRead) "READ" else if (mail.isUrgent) "URGENT" else "UNREAD"
-                val snip = if (mail.snippet.isNotBlank()) " — ${mail.snippet.take(120)}" else ""
-                sb.appendLine("  * [$stateLbl/${mail.tag.label}] ${mail.sender}: ${mail.subject}$snip (${formatMillisDateTime(mail.receivedAtMillis)})")
+                val snip = if (mail.snippet.isNotBlank()) " — ${mail.snippet.take(55)}" else ""
+                sb.appendLine("  * [$stateLbl/${mail.tag.label}] ${mail.sender.take(28)}: ${mail.subject.take(50)}$snip")
             }
         }
 
         if (snapshot.insights.isNotEmpty()) {
             sb.appendLine()
-            sb.appendLine("[5. DETECTED EXECUTIVE ALERTS]")
-            snapshot.insights.forEach { sb.appendLine("- [${it.domain}] ${it.title}: ${it.detail}") }
+            sb.appendLine("[5. KEY ALERTS]")
+            snapshot.insights.take(4).forEach { sb.appendLine("- ${it.title}: ${it.detail.take(120)}") }
+        }
+
+        val mkt = snapshot.marketSnapshot
+        if (mkt.hasMarketData || snapshot.investableSurplus > 0.0) {
+            sb.appendLine()
+            sb.appendLine("[6. NEPAL IPO & NEPSE INVESTMENT RADAR]")
+            sb.appendLine("- Investable Surplus: ${formatMoney(c, snapshot.investableSurplus)}${if (mkt.marketAsOfLabel.isNotBlank()) " | ${mkt.marketAsOfLabel}" else ""}")
+            if (mkt.openIpos.isNotEmpty()) {
+                mkt.openIpos.take(3).forEach { ipo ->
+                    val aud = if (ipo.isGeneralPublic) "General" else ipo.shareType
+                    val rat = if (ipo.rating.isNotBlank()) " | ${ipo.rating}" else ""
+                    sb.appendLine("  * IPO OPEN ($aud): ${ipo.companyName} (${ipo.stockSymbol}) Min ${formatMoney(c, ipo.minInvestmentNpr)} Closes ${ipo.closingDateAd}$rat")
+                }
+            }
+            if (mkt.upcomingIpos.isNotEmpty()) {
+                mkt.upcomingIpos.take(2).forEach { ipo ->
+                    val aud = if (ipo.isGeneralPublic) "General" else ipo.shareType
+                    sb.appendLine("  * IPO UPCOMING ($aud): ${ipo.companyName} (${ipo.stockSymbol}) ${ipo.openingDateAd}..${ipo.closingDateAd}")
+                }
+            }
+            if (mkt.promisingStocks.isNotEmpty()) {
+                mkt.promisingStocks.take(4).forEach { st ->
+                    val cr = String.format(Locale.US, "%.1f", st.turnoverNpr / 10_000_000.0)
+                    sb.appendLine("  * NEPSE ${st.symbol}: ${formatMoney(c, st.ltp)} (${String.format(Locale.US, "%+.2f%%", st.percentChange)}) ${cr}Cr | ${st.signalTag}")
+                }
+            }
         }
         return sb.toString()
+    }
+
+    private fun formatDossierTxnLine(tx: TransactionRecord, currency: String): String {
+        val kind = if (tx.debit > 0) "-${formatMoney(currency, tx.debit)}" else "+${formatMoney(currency, tx.credit)}"
+        val acct = if (tx.accountType == AccountType.CREDIT) "[CC] " else ""
+        return "  * ${tx.dateIso} | $acct${tx.normalizedDescription.ifBlank { "(blank)" }.take(34)} | $kind | ${tx.category}"
+    }
+
+    private fun findQueryMatchedTransactions(
+        chronologicalDesc: List<TransactionRecord>,
+        userQuery: String,
+        alreadyIncluded: Set<String>
+    ): List<TransactionRecord> {
+        val q = userQuery.trim().lowercase(Locale.US)
+        if (q.isEmpty()) return emptyList()
+        val stopWords = setOf(
+            "what", "when", "where", "how", "much", "did", "spend", "spent", "spending", "expense",
+            "expenses", "today", "yesterday", "week", "month", "last", "about", "check", "show",
+            "tell", "give", "please", "with", "from", "have", "that", "this", "your", "mine"
+        )
+        val tokens = Regex("[a-z0-9\\-]{3,}").findAll(q).map { it.value }.filterNot { it in stopWords }.toList()
+        if (tokens.isEmpty()) return emptyList()
+        return chronologicalDesc
+            .filter { tx ->
+                tx.id !in alreadyIncluded && tokens.any { tok ->
+                    tx.dateIso.contains(tok, ignoreCase = true) ||
+                        tx.normalizedDescription.contains(tok, ignoreCase = true) ||
+                        tx.description.contains(tok, ignoreCase = true) ||
+                        tx.category.contains(tok, ignoreCase = true)
+                }
+            }
+            .take(12)
     }
 
     fun buildDeterministicBriefing(snapshot: ExecutiveSnapshot, profile: SecretaryProfile): String {
@@ -601,12 +799,63 @@ object ExecutiveAnalyticsEngine {
     fun buildDeterministicReply(
         userQuery: String,
         snapshot: ExecutiveSnapshot,
-        profile: SecretaryProfile
+        profile: SecretaryProfile,
+        transactions: List<TransactionRecord> = emptyList(),
+        today: LocalDate = LocalDate.now()
     ): String {
         val q = userQuery.lowercase(Locale.US)
         val c = profile.currencySymbol
         return when {
-            q.contains("leak") || q.contains("category") || q.contains("spend") || q.contains("budget") -> {
+            q.contains("yesterday") || q.contains("today's spend") || q.contains("spent today") || q.contains("spend today") -> {
+                val targetDate = if (q.contains("yesterday")) today.minusDays(1) else today
+                val targetIso = targetDate.format(isoFmt)
+                val label = if (q.contains("yesterday")) "Yesterday ($targetIso)" else "Today ($targetIso)"
+                val rows = transactions.filter { it.dateIso == targetIso }
+                if (rows.isEmpty()) {
+                    "No transactions are recorded for $label in your current Day Book snapshot. Tap Sync or Log in Finances if you have new entries to add."
+                } else {
+                    val totalDebit = DayBookParserAndHygiene.round2(rows.sumOf { it.debit })
+                    val totalCredit = DayBookParserAndHygiene.round2(rows.sumOf { it.credit })
+                    val lines = rows.joinToString("\n") { tx ->
+                        val amt = if (tx.debit > 0) "-${formatMoney(c, tx.debit)}" else "+${formatMoney(c, tx.credit)}"
+                        "• ${tx.normalizedDescription.ifBlank { "(No description)" }}: $amt (${tx.category})"
+                    }
+                    val uncatCount = rows.count { it.category.equals("Uncategorized", ignoreCase = true) }
+                    val clarifyNote = if (uncatCount > 0) {
+                        "\n\nClarification needed: $uncatCount entr${if (uncatCount == 1) "y is" else "ies are"} uncategorized — tap them in Finances to label what they were for."
+                    } else ""
+                    buildString {
+                        appendLine("$label Spending Breakdown (${formatMoney(c, totalDebit)} spent${if (totalCredit > 0) " · ${formatMoney(c, totalCredit)} received" else ""}):")
+                        append(lines)
+                        if (clarifyNote.isNotEmpty()) append(clarifyNote)
+                    }.trim()
+                }
+            }
+            q.contains("ipo") || q.contains("nepse") || q.contains("invest") || q.contains("share") || q.contains("stock") -> {
+                val mkt = snapshot.marketSnapshot
+                val ipoLines = (mkt.openIpos + mkt.upcomingIpos).take(5).joinToString("\n") { ipo ->
+                    val aud = if (ipo.isGeneralPublic) "General Public" else ipo.shareType
+                    val rat = if (ipo.rating.isNotBlank()) " · ${ipo.rating}" else ""
+                    "• [${ipo.status.uppercase(Locale.US)} · $aud] ${ipo.companyName} (${ipo.stockSymbol}) — Min ${formatMoney(c, ipo.minInvestmentNpr)}, closes ${ipo.closingDateAd}$rat"
+                }.ifBlank { "• Tap 'Scan Web' in Finances -> Nepal IPO & NEPSE to load live Nepal IPO issues." }
+                val stockLines = mkt.promisingStocks.take(5).joinToString("\n") { st ->
+                    val cr = String.format(Locale.US, "%.2f", st.turnoverNpr / 10_000_000.0)
+                    "• ${st.symbol} (${st.companyName}): ${formatMoney(c, st.ltp)} (${String.format(Locale.US, "%+.2f%%", st.percentChange)}) · Rs. ${cr} Cr · ${st.signalTag}"
+                }.ifBlank { "• No secondary screen loaded yet — tap 'Scan Web' in Finances." }
+                buildString {
+                    appendLine("Nepal IPO & NEPSE Investment Radar (${mkt.marketAsOfLabel.ifBlank { "Live Screen" }}):")
+                    appendLine("• Investable Surplus: ${formatMoney(c, snapshot.investableSurplus)} (Liquid ${formatMoney(c, snapshot.debitBalance)} − CC ${formatMoney(c, abs(snapshot.creditCardBalance))} − Monthly Buffer)")
+                    appendLine()
+                    appendLine("Open & Upcoming IPOs:")
+                    appendLine(ipoLines)
+                    appendLine()
+                    appendLine("Liquid NEPSE Secondary Candidates:")
+                    appendLine(stockLines)
+                    appendLine()
+                    append("Note: Automated NepaliPaisa/NEPSE screening for research only — verify prospectus, EPS/PE, and risk before investing.")
+                }.trim()
+            }
+            q.contains("leak") || q.contains("category") || q.contains("spend") || q.contains("budget") || q.contains("alcohol") || q.contains("cigar") || q.contains("tobacco") -> {
                 val cats = if (snapshot.topCategories30d.isEmpty()) {
                     "No categorized spending synced yet."
                 } else {

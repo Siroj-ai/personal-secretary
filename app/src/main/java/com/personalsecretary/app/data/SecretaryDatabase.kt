@@ -239,6 +239,59 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
         db.insertWithOnConflict("transactions", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
+    suspend fun updateTransactionDetails(
+        txId: String,
+        newDescription: String,
+        newCategory: String
+    ) = withContext(Dispatchers.IO) {
+        val cv = ContentValues().apply {
+            put("normalized_description", newDescription.trim())
+            put("category", newCategory.trim().ifBlank { "Uncategorized" })
+            put("auto_categorized", 0)
+        }
+        writableDatabase.update("transactions", cv, "id = ?", arrayOf(txId))
+    }
+
+    /**
+     * Re-applies upgraded categorization rules to existing 'Uncategorized' rows on app upgrades
+     * without ever overwriting user-edited or already-categorized transactions.
+     */
+    suspend fun reclassifyUncategorizedTransactions(): Int = withContext(Dispatchers.IO) {
+        val db = writableDatabase
+        val updates = mutableListOf<Pair<String, String>>()
+        db.rawQuery(
+            "SELECT id, description, normalized_description, debit, credit FROM transactions WHERE category = 'Uncategorized' OR category = ''",
+            null
+        ).use { c ->
+            while (c.moveToNext()) {
+                val id = c.getString(0)
+                val desc = c.getString(1)
+                val norm = c.getString(2).ifBlank { desc }
+                val debit = c.getDouble(3)
+                val credit = c.getDouble(4)
+                val inferred = DayBookParserAndHygiene.inferCategory(norm, debit, credit)
+                if (inferred != "Uncategorized") {
+                    updates += id to inferred
+                }
+            }
+        }
+        if (updates.isEmpty()) return@withContext 0
+        db.beginTransaction()
+        try {
+            updates.forEach { (id, category) ->
+                val cv = ContentValues().apply {
+                    put("category", category)
+                    put("auto_categorized", 1)
+                }
+                db.update("transactions", cv, "id = ?", arrayOf(id))
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        updates.size
+    }
+
     suspend fun loadTransactions(): List<TransactionRecord> = withContext(Dispatchers.IO) {
         val out = mutableListOf<TransactionRecord>()
         readableDatabase.rawQuery(
@@ -340,6 +393,15 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
     suspend fun loadHealthVitals(): HealthVitalsSummary = withContext(Dispatchers.IO) {
         val raw = getKv(KEY_HEALTH_VITALS) ?: return@withContext HealthVitalsSummary()
         runCatching { json.decodeFromString<HealthVitalsSummary>(raw) }.getOrDefault(HealthVitalsSummary())
+    }
+
+    suspend fun saveMarketSnapshot(snapshot: NepalMarketSnapshot) = withContext(Dispatchers.IO) {
+        putKv(KEY_MARKET_SNAPSHOT, json.encodeToString(snapshot))
+    }
+
+    suspend fun loadMarketSnapshot(): NepalMarketSnapshot = withContext(Dispatchers.IO) {
+        val raw = getKv(KEY_MARKET_SNAPSHOT) ?: return@withContext NepalMarketSnapshot()
+        runCatching { json.decodeFromString<NepalMarketSnapshot>(raw) }.getOrDefault(NepalMarketSnapshot())
     }
 
     suspend fun upsertTask(task: SecretaryTask) = withContext(Dispatchers.IO) {
@@ -552,5 +614,6 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
         private const val KEY_LATEST_BRIEFING = "latest_briefing_v1"
         private const val KEY_HOURLY_STEPS = "hourly_steps_v1"
         private const val KEY_HEALTH_VITALS = "health_vitals_v1"
+        private const val KEY_MARKET_SNAPSHOT = "nepal_market_v1"
     }
 }

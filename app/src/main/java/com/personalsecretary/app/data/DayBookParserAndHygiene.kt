@@ -259,9 +259,15 @@ object DayBookParserAndHygiene {
         }
         return when {
             d.contains("salary") -> "Income"
-            d.contains("cigarette") || d.contains("cigarrette") || d.contains("surya") ||
-                d.contains("rum") || d.contains("beer") || d.contains("wine") || d.contains("khukuri") ||
+            d.contains("cigar") || d.contains("churot") || d.contains("surya") || d.contains("shikhar") ||
+                d.contains("rum") || d.contains("beer") || d.contains("wine") || d.contains("whisky") ||
+                d.contains("whiskey") || d.contains("vodka") || d.contains("gin") || d.contains("raksi") ||
+                d.contains("tuborg") || d.contains("carlsberg") || d.contains("barahsinghe") ||
+                d.contains("khukuri") || d.contains("smoke") ||
                 d == "cg" || d == "cig" || d == "ciggy" || d == "pilot" -> "Tobacco & Alcohol"
+            d.contains("nabil stock") || d.contains("dp-nabil") || d.contains("broker") ||
+                d.contains("meroshare") || d.contains("cdsc") || d.contains("nepse") ||
+                d.contains("ipo") || d.contains("share") -> "Investments & Brokerage"
             d.contains("khaja") || d.contains("kha") || d.contains("chiya") || d.contains("tea") ||
                 d.contains("momo") || d.contains("coke") || d.contains("curd") || d.contains("dahi") ||
                 d.contains("milk") || d.contains("dudh") || d.contains("apple") || d.contains("kiwi") ||
@@ -269,7 +275,8 @@ object DayBookParserAndHygiene {
                 d.contains("cak") || d.contains("chowmein") || d.contains("samosa") || d.contains("paneer") ||
                 d.contains("vegetable") || d.contains("fruit") || d.contains("egg") -> "Food & Dining"
             d.contains("atm wdl") || d.contains("monthly household") || d.contains("house") ||
-                d.contains("hair") || d.contains("beauty") || d.contains("mop") || d.contains("cocopeat") ||
+                d.contains("hair") || d.contains("beauty") || d.contains("salon") || d.contains("sunglass") ||
+                d.contains("mop") || d.contains("cocopeat") ||
                 d.contains("pant") || d.contains("slipper") -> "Household & Personal"
             d.contains("pathao") || d.contains("indrive") || d.contains("taxi") ||
                 d.contains("bus") || d.contains("petrol") || d.contains("fuel") -> "Transport"

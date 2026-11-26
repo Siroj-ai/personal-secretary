@@ -18,7 +18,7 @@ fun parseSemverCode(version: String): Int {
 val resolvedVersionName: String = (
     providers.gradleProperty("RELEASE_VERSION_NAME").orNull
         ?: System.getenv("RELEASE_VERSION_NAME")
-        ?: "1.2.3"
+        ?: "1.3.0"
     ).trim().removePrefix("v").removePrefix("V")
 
 val resolvedVersionCode: Int = (

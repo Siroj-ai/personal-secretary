@@ -206,6 +206,49 @@ data class EmailAlertItem(
 )
 
 @Serializable
+data class NepalIpoItem(
+    val id: String,
+    val companyName: String,
+    val stockSymbol: String,
+    val sectorName: String,
+    val shareType: String,
+    val isGeneralPublic: Boolean,
+    val pricePerUnit: Double,
+    val minUnits: Int,
+    val minInvestmentNpr: Double,
+    val rating: String = "",
+    val openingDateAd: String = "",
+    val closingDateAd: String = "",
+    val status: String = ""
+)
+
+@Serializable
+data class NepseStockPick(
+    val symbol: String,
+    val companyName: String,
+    val ltp: Double,
+    val percentChange: Double,
+    val turnoverNpr: Double,
+    val transactions: Int,
+    val volume: Int,
+    val signalTag: String,
+    val score: Double = 0.0
+)
+
+@Serializable
+data class NepalMarketSnapshot(
+    val openIpos: List<NepalIpoItem> = emptyList(),
+    val upcomingIpos: List<NepalIpoItem> = emptyList(),
+    val promisingStocks: List<NepseStockPick> = emptyList(),
+    val marketAsOfLabel: String = "",
+    val sourceLabel: String = "NepaliPaisa (NEPSE)",
+    val syncedAtMillis: Long = 0L
+) {
+    val hasMarketData: Boolean
+        get() = openIpos.isNotEmpty() || upcomingIpos.isNotEmpty() || promisingStocks.isNotEmpty()
+}
+
+@Serializable
 enum class SecretaryVideoSlot(
     val slotKey: String,
     val title: String,
@@ -307,8 +350,15 @@ data class ExecutiveSnapshot(
     val last30DaysIncome: Double = 0.0,
     val last30DaysExpense: Double = 0.0,
     val dailyBurnRate30d: Double = 0.0,
+    val todaySpend: Double = 0.0,
+    val yesterdaySpend: Double = 0.0,
     val budgetUsedPercent: Double = 0.0,
+    val tobaccoAlcohol7d: Double = 0.0,
     val tobaccoAlcohol30d: Double = 0.0,
+    val uncategorizedRecentCount: Int = 0,
+    val uncategorizedRecentAmount: Double = 0.0,
+    val investableSurplus: Double = 0.0,
+    val marketSnapshot: NepalMarketSnapshot = NepalMarketSnapshot(),
     val topCategories30d: List<CategorySpend> = emptyList(),
     val monthlyCashFlows: List<MonthlyCashFlow> = emptyList(),
     val hygieneReport: FinancialHygieneReport = FinancialHygieneReport(),

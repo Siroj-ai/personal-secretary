@@ -1,6 +1,7 @@
 package com.personalsecretary.app.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,18 +13,22 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -47,6 +52,8 @@ import androidx.compose.ui.unit.dp
 import com.personalsecretary.app.data.AccountType
 import com.personalsecretary.app.data.ExecutiveAnalyticsEngine
 import com.personalsecretary.app.data.ExecutiveSnapshot
+import com.personalsecretary.app.data.NepalIpoItem
+import com.personalsecretary.app.data.NepseStockPick
 import com.personalsecretary.app.data.SecretaryProfile
 import com.personalsecretary.app.data.SsfSummary
 import com.personalsecretary.app.data.TransactionRecord
@@ -59,9 +66,11 @@ import com.personalsecretary.app.ui.theme.CardSurfaceElevated
 import com.personalsecretary.app.ui.theme.CoralAccent
 import com.personalsecretary.app.ui.theme.EmeraldAccent
 import com.personalsecretary.app.ui.theme.ObsidianBg
+import com.personalsecretary.app.ui.theme.SkyAccent
 import com.personalsecretary.app.ui.theme.TextMuted
 import com.personalsecretary.app.ui.theme.TextPrimary
 import com.personalsecretary.app.ui.theme.TextSecondary
+import java.util.Locale
 
 @Composable
 fun FinancesScreen(
@@ -69,21 +78,34 @@ fun FinancesScreen(
     profile: SecretaryProfile,
     transactions: List<TransactionRecord>,
     isSyncing: Boolean,
+    isScanningMarket: Boolean,
     syncMessage: String?,
+    statusToast: String?,
     onSyncNow: () -> Unit,
+    onRefreshMarket: () -> Unit,
+    onRunSmartAlertsNow: () -> Unit,
     onAddTransaction: (description: String, amount: Double, isDebit: Boolean, category: String, pushRemote: Boolean) -> Unit,
+    onUpdateTransaction: (txId: String, description: String, category: String) -> Unit,
+    onAskClaraAboutInvesting: () -> Unit,
     onNavigateToSetup: () -> Unit
 ) {
     val cur = profile.currencySymbol
     var searchQuery by remember { mutableStateOf("") }
-    var filterMode by remember { mutableStateOf("ALL") } // ALL, DEBIT, CREDIT, ANOMALY
+    var filterMode by remember { mutableStateOf("ALL") } // ALL, UNCAT, DEBIT, CREDIT, ANOMALY
     var showAddDialog by remember { mutableStateOf(false) }
+    var editingTx by remember { mutableStateOf<TransactionRecord?>(null) }
 
     val filteredTxns = remember(transactions, searchQuery, filterMode) {
         transactions
-            .asReversed()
+            .withIndex()
+            .sortedWith(
+                compareByDescending<IndexedValue<TransactionRecord>> { it.value.dateIso }
+                    .thenByDescending { it.index }
+            )
+            .map { it.value }
             .filter { tx ->
                 val matchesMode = when (filterMode) {
+                    "UNCAT" -> tx.category.equals("Uncategorized", ignoreCase = true)
                     "DEBIT" -> tx.debit > 0.0
                     "CREDIT" -> tx.credit > 0.0
                     "ANOMALY" -> tx.isBalanceAnomaly
@@ -268,11 +290,41 @@ fun FinancesScreen(
             }
         }
 
+        if (!statusToast.isNullOrBlank()) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = CardSurfaceElevated,
+                    border = BorderStroke(1.dp, AccentGold.copy(alpha = 0.45f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = statusToast,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AccentGold,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
+            }
+        }
+
         // Social Security Fund (SSF) Full Breakdown Card
         if (snapshot.ssfSummary.refundableAmount > 0.0 || snapshot.ssfSummary.totalDueAmount > 0.0) {
             item {
                 SsfDetailsCard(ssf = snapshot.ssfSummary, currency = cur)
             }
+        }
+
+        // Nepal IPO & NEPSE Secondary Investment Radar
+        item {
+            NepalMarketInvestmentCard(
+                snapshot = snapshot,
+                currency = cur,
+                isScanning = isScanningMarket,
+                onRefreshMarket = onRefreshMarket,
+                onRunSmartAlertsNow = onRunSmartAlertsNow,
+                onAskClaraAboutInvesting = onAskClaraAboutInvesting
+            )
         }
 
         // Monthly Cash Flow
@@ -341,12 +393,23 @@ fun FinancesScreen(
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("ALL" to "All", "DEBIT" to "Debits", "CREDIT" to "Credits", "ANOMALY" to "Gaps").forEach { (key, label) ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf(
+                    "ALL" to "All",
+                    "UNCAT" to "Uncat.",
+                    "DEBIT" to "Debits",
+                    "CREDIT" to "Credits",
+                    "ANOMALY" to "Gaps"
+                ).forEach { (key, label) ->
                     FilterChip(
                         selected = filterMode == key,
                         onClick = { filterMode = key },
-                        label = { Text(label) }
+                        label = { Text(label, maxLines = 1, softWrap = false) }
                     )
                 }
             }
@@ -368,7 +431,11 @@ fun FinancesScreen(
             }
         } else {
             items(filteredTxns, key = { it.id }) { tx ->
-                TransactionRowCard(tx = tx, currency = cur)
+                TransactionRowCard(
+                    tx = tx,
+                    currency = cur,
+                    onClick = { editingTx = tx }
+                )
             }
         }
     }
@@ -380,6 +447,18 @@ fun FinancesScreen(
             onSubmit = { desc, amt, isDebit, cat, pushRemote ->
                 showAddDialog = false
                 onAddTransaction(desc, amt, isDebit, cat, pushRemote)
+            }
+        )
+    }
+
+    editingTx?.let { target ->
+        ClarifyTransactionDialog(
+            tx = target,
+            currency = cur,
+            onDismiss = { editingTx = null },
+            onSave = { newDesc, newCat ->
+                editingTx = null
+                onUpdateTransaction(target.id, newDesc, newCat)
             }
         )
     }
@@ -489,8 +568,279 @@ private fun SsfMetricRow(
 }
 
 @Composable
-private fun TransactionRowCard(tx: TransactionRecord, currency: String) {
+private fun NepalMarketInvestmentCard(
+    snapshot: ExecutiveSnapshot,
+    currency: String,
+    isScanning: Boolean,
+    onRefreshMarket: () -> Unit,
+    onRunSmartAlertsNow: () -> Unit,
+    onAskClaraAboutInvesting: () -> Unit
+) {
+    val mkt = snapshot.marketSnapshot
+    val surplus = snapshot.investableSurplus
+    val hasSurplus = surplus >= 2000.0
+
+    ExecutiveCard(borderColor = if (hasSurplus && mkt.hasMarketData) EmeraldAccent.copy(alpha = 0.45f) else CardBorder) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.TrendingUp,
+                    contentDescription = null,
+                    tint = EmeraldAccent,
+                    modifier = Modifier.size(20.dp)
+                )
+                Column {
+                    Text(
+                        text = "Nepal IPO & NEPSE",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = mkt.marketAsOfLabel
+                            .removePrefix("As of ")
+                            .substringBefore("|")
+                            .trim()
+                            .ifBlank { "Live NepaliPaisa / NEPSE" },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            OutlinedButton(
+                onClick = onRefreshMarket,
+                enabled = !isScanning,
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                if (isScanning) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = AccentGold)
+                    Spacer(Modifier.width(5.dp))
+                    Text("Scan...", maxLines = 1, softWrap = false)
+                } else {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Scan Web", maxLines = 1, softWrap = false)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = CardSurfaceElevated,
+            border = BorderStroke(1.dp, if (hasSurplus) EmeraldAccent.copy(alpha = 0.4f) else CardBorder),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Investable Surplus", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                    Text(
+                        text = if (hasSurplus) {
+                            "Ready for IPOs (Rs. 1,000+) & liquid NEPSE shares"
+                        } else {
+                            "Build cash buffer & clear CC before investing"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                }
+                Text(
+                    text = ExecutiveAnalyticsEngine.formatMoney(currency, surplus),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (hasSurplus) EmeraldAccent else TextMuted,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        val combinedIpos = (mkt.openIpos + mkt.upcomingIpos).take(4)
+        if (combinedIpos.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "OPEN & UPCOMING NEPAL IPOS",
+                style = MaterialTheme.typography.labelSmall,
+                color = AccentGold,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                combinedIpos.forEach { ipo -> IpoCompactRow(ipo = ipo, currency = currency) }
+            }
+        }
+
+        if (mkt.promisingStocks.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "PROMISING LIQUID NEPSE SHARES",
+                style = MaterialTheme.typography.labelSmall,
+                color = SkyAccent,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                mkt.promisingStocks.take(5).forEach { st -> NepsePickRow(pick = st, currency = currency) }
+            }
+        } else if (!isScanning) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Tap 'Scan Web' to fetch live open Nepal IPOs and high-liquidity NEPSE stocks.",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextMuted
+            )
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = onAskClaraAboutInvesting,
+                colors = ButtonDefaults.buttonColors(containerColor = AccentGold, contentColor = ObsidianBg),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Ask Clara to Pick", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+            }
+            OutlinedButton(
+                onClick = onRunSmartAlertsNow,
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp)
+            ) {
+                Icon(Icons.Default.NotificationsActive, contentDescription = null, modifier = Modifier.size(15.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Alert Check", maxLines = 1, softWrap = false)
+            }
+        }
+
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "Live NepaliPaisa/NEPSE screening for research only — verify fundamentals before investing.",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextMuted
+        )
+    }
+}
+
+@Composable
+private fun IpoCompactRow(ipo: NepalIpoItem, currency: String) {
+    val isOpen = ipo.status.equals("Open", ignoreCase = true)
+    val badgeColor = if (isOpen && ipo.isGeneralPublic) EmeraldAccent else if (isOpen) AccentGold else SkyAccent
+    val audience = if (ipo.isGeneralPublic) "General Public" else ipo.shareType
+
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = CardSurfaceElevated,
+        border = BorderStroke(1.dp, if (isOpen && ipo.isGeneralPublic) EmeraldAccent.copy(alpha = 0.4f) else CardBorder),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "${ipo.companyName} (${ipo.stockSymbol})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(end = 6.dp)
+                )
+                Text(
+                    text = if (isOpen) "OPEN" else ipo.status.uppercase(Locale.US),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = badgeColor,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            val rat = if (ipo.rating.isNotBlank()) " · ${ipo.rating}" else ""
+            Text(
+                text = "$audience · Min ${ExecutiveAnalyticsEngine.formatMoney(currency, ipo.minInvestmentNpr)} · Closes ${ipo.closingDateAd}$rat",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextSecondary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun NepsePickRow(pick: NepseStockPick, currency: String) {
+    val pctColor = if (pick.percentChange >= 0.0) EmeraldAccent else CoralAccent
+    val cr = String.format(Locale.US, "%.1f", pick.turnoverNpr / 10_000_000.0)
+
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = CardSurfaceElevated,
+        border = BorderStroke(1.dp, CardBorder),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                Text(
+                    text = "${pick.symbol} · ${pick.signalTag}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${pick.companyName} · Rs. ${cr} Cr (${pick.transactions} trades)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = ExecutiveAnalyticsEngine.formatMoney(currency, pick.ltp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextPrimary,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = String.format(Locale.US, "%+.2f%%", pick.percentChange),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = pctColor,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TransactionRowCard(
+    tx: TransactionRecord,
+    currency: String,
+    onClick: () -> Unit
+) {
     val isDebit = tx.debit > 0.0
+    val isUncat = tx.category.equals("Uncategorized", ignoreCase = true)
     val amountText = if (isDebit) {
         "-${ExecutiveAnalyticsEngine.formatMoney(currency, tx.debit)}"
     } else {
@@ -501,25 +851,37 @@ private fun TransactionRowCard(tx: TransactionRecord, currency: String) {
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = CardSurfaceElevated,
-        border = BorderStroke(1.dp, if (tx.isBalanceAnomaly) CoralAccent.copy(alpha = 0.5f) else CardBorder),
-        modifier = Modifier.fillMaxWidth()
+        border = BorderStroke(
+            1.dp,
+            when {
+                tx.isBalanceAnomaly -> CoralAccent.copy(alpha = 0.5f)
+                isUncat -> AccentGold.copy(alpha = 0.45f)
+                else -> CardBorder
+            }
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     text = tx.normalizedDescription.ifBlank { "(No description)" },
                     style = MaterialTheme.typography.titleSmall,
                     color = TextPrimary,
-                    maxLines = 1
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "${tx.dateIso} · ${tx.category}${if (tx.autoCategorized) " (auto)" else ""}${if (tx.accountType == AccountType.CREDIT) " · CC" else ""}",
+                    text = "${tx.dateIso} · ${tx.category}${if (isUncat) " · Tap to label" else if (tx.autoCategorized) " (auto)" else ""}${if (tx.accountType == AccountType.CREDIT) " · CC" else ""}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = TextMuted
+                    color = if (isUncat) AccentGold else TextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 if (tx.isBalanceAnomaly) {
                     Text(
@@ -539,6 +901,83 @@ private fun TransactionRowCard(tx: TransactionRecord, currency: String) {
             }
         }
     }
+}
+
+@Composable
+private fun ClarifyTransactionDialog(
+    tx: TransactionRecord,
+    currency: String,
+    onDismiss: () -> Unit,
+    onSave: (description: String, category: String) -> Unit
+) {
+    var desc by remember(tx.id) { mutableStateOf(tx.normalizedDescription.ifBlank { tx.description }) }
+    var category by remember(tx.id) { mutableStateOf(tx.category) }
+    val categories = listOf(
+        "Food & Dining",
+        "Household & Personal",
+        "Tobacco & Alcohol",
+        "Investments & Brokerage",
+        "Transport",
+        "Medical",
+        "Utilities & Subscriptions",
+        "Transfers & Payments",
+        "Income"
+    )
+    val amtLabel = if (tx.debit > 0.0) {
+        "-${ExecutiveAnalyticsEngine.formatMoney(currency, tx.debit)}"
+    } else {
+        "+${ExecutiveAnalyticsEngine.formatMoney(currency, tx.credit)}"
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Clarify Transaction") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "${tx.dateIso} · $amtLabel",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AccentGold
+                )
+                OutlinedTextField(
+                    value = desc,
+                    onValueChange = { desc = it },
+                    label = { Text("What was this for?") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = category,
+                    onValueChange = { category = it },
+                    label = { Text("Category") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    categories.forEach { cat ->
+                        FilterChip(
+                            selected = category.equals(cat, ignoreCase = true),
+                            onClick = { category = cat },
+                            label = { Text(cat.substringBefore(" &").substringBefore(" "), maxLines = 1, softWrap = false) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(desc.trim().ifBlank { tx.normalizedDescription }, category.trim().ifBlank { "Uncategorized" }) }
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }
 
 @Composable

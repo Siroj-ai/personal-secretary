@@ -23,6 +23,7 @@ import com.personalsecretary.app.data.ExecutiveSnapshot
 import com.personalsecretary.app.data.FinancialHygieneReport
 import com.personalsecretary.app.data.HealthVitalsSummary
 import com.personalsecretary.app.data.InsightSeverity
+import com.personalsecretary.app.data.NepalMarketSnapshot
 import com.personalsecretary.app.data.SecretaryDatabase
 import com.personalsecretary.app.data.SecretaryProfile
 import com.personalsecretary.app.data.SecretaryTask
@@ -37,11 +38,13 @@ import com.personalsecretary.app.health.OnePlusStepTracker
 import com.personalsecretary.app.health.StepPermissionStatus
 import com.personalsecretary.app.mail.EmailNotificationAccessHelper
 import com.personalsecretary.app.mail.EmailNotificationEvents
+import com.personalsecretary.app.market.NepalMarketClient
 import com.personalsecretary.app.media.SecretaryMediaStore
 import com.personalsecretary.app.schedule.DeviceCalendarReader
 import com.personalsecretary.app.schedule.TaskReminderScheduler
 import com.personalsecretary.app.update.OtaUpdateManager
 import com.personalsecretary.app.update.OtaUpdateState
+import com.personalsecretary.app.work.DailyBriefingWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -76,6 +79,7 @@ data class SecretaryUiState(
     val briefingText: String = "",
     val isGeneratingBriefing: Boolean = false,
     val isSyncingFinances: Boolean = false,
+    val isScanningMarket: Boolean = false,
     val syncStatusMessage: String? = null,
     val stepPermissions: StepPermissionStatus = StepPermissionStatus(),
     val engineState: GemmaEngineState = GemmaEngineState(),
@@ -99,6 +103,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val database = SecretaryDatabase(application)
     private val syncClient = DayBookSyncClient()
+    private val marketClient = NepalMarketClient()
     private val mediaStore = SecretaryMediaStore(application)
     private val calendarReader = DeviceCalendarReader(application)
     val stepTracker = OnePlusStepTracker(application, database, viewModelScope)
@@ -117,6 +122,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
     private var calendarEventsCache = emptyList<CalendarEventItem>()
     private var tasksCache = emptyList<SecretaryTask>()
     private var emailAlertsCache = emptyList<EmailAlertItem>()
+    private var marketSnapshotCache = NepalMarketSnapshot()
 
     private var generationJob: Job? = null
     private var tts: TextToSpeech? = null
@@ -179,6 +185,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
     private fun loadInitialState() {
         viewModelScope.launch {
             val profile = database.loadProfile()
+            database.reclassifyUncategorizedTransactions()
             val txns = database.loadTransactions()
             ssfCache = database.loadSsfSummary()
             earningsCache = database.loadEarnings()
@@ -188,6 +195,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
             healthVitalsCache = database.loadHealthVitals()
             tasksCache = database.loadTasks()
             emailAlertsCache = database.loadEmailAlerts(100)
+            marketSnapshotCache = database.loadMarketSnapshot()
             val calGranted = calendarReader.isCalendarPermissionGranted()
             val notifAccess = EmailNotificationAccessHelper.isNotificationAccessGranted(getApplication())
             calendarEventsCache = if (calGranted) calendarReader.loadUpcomingEvents(7) else emptyList()
@@ -241,6 +249,10 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
             if (resolvedProfile.autoCheckUpdates && resolvedProfile.githubRepo.contains("/")) {
                 checkForOtaUpdate(silent = true)
             }
+            val marketStale = System.currentTimeMillis() - marketSnapshotCache.syncedAtMillis > 4L * 60L * 60L * 1000L
+            if (!marketSnapshotCache.hasMarketData || marketStale) {
+                refreshNepalMarket(silent = true)
+            }
         }
     }
 
@@ -257,7 +269,8 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
             healthVitals = healthVitalsCache,
             calendarEvents = calendarEventsCache,
             tasks = tasksCache,
-            emailAlerts = emailAlertsCache
+            emailAlerts = emailAlertsCache,
+            marketSnapshot = marketSnapshotCache
         )
         _uiState.update { it.copy(snapshot = snap) }
     }
@@ -466,7 +479,62 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
         refreshPermissionsAndSteps()
         refreshScheduleAndCalendar()
         refreshEmailInbox()
+        refreshNepalMarket(silent = true)
         syncDayBook()
+    }
+
+    fun refreshNepalMarket(silent: Boolean = false) {
+        if (_uiState.value.isScanningMarket) return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isScanningMarket = true,
+                    statusToast = if (silent) it.statusToast else "Scanning Nepal IPOs & live NEPSE shares..."
+                )
+            }
+            val result = marketClient.fetchMarketSnapshot()
+            result.onSuccess { snap ->
+                marketSnapshotCache = snap
+                database.saveMarketSnapshot(snap)
+                _uiState.update {
+                    it.copy(
+                        isScanningMarket = false,
+                        statusToast = if (silent) it.statusToast else {
+                            "Scanned ${snap.openIpos.size} open IPO(s), ${snap.upcomingIpos.size} upcoming & ${snap.promisingStocks.size} NEPSE setups."
+                        }
+                    )
+                }
+                recomputeSnapshot()
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(
+                        isScanningMarket = false,
+                        statusToast = if (silent) it.statusToast else "Market scan failed: ${err.localizedMessage}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun updateTransactionDetails(txId: String, newDescription: String, newCategory: String) {
+        viewModelScope.launch {
+            database.updateTransactionDetails(txId, newDescription, newCategory)
+            val updated = database.loadTransactions()
+            _uiState.update {
+                it.copy(
+                    transactions = updated,
+                    statusToast = "Updated entry as '$newCategory'."
+                )
+            }
+            recomputeSnapshot()
+        }
+    }
+
+    fun triggerSmartAlertsNow() {
+        DailyBriefingWorker.runNow(getApplication())
+        _uiState.update {
+            it.copy(statusToast = "Running spending, clarity & Nepal IPO notification check...")
+        }
     }
 
     fun syncDayBook() {
@@ -821,7 +889,8 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                 val dossier = ExecutiveAnalyticsEngine.buildGemmaDossier(
                     snapshot = st.snapshot,
                     profile = st.profile,
-                    recentTransactions = st.transactions
+                    recentTransactions = st.transactions,
+                    userQuery = trimmed
                 )
                 val recentTurns = updatedHistory.dropLast(1).takeLast(4).joinToString("\n") { m ->
                     "${if (m.role == ChatRole.USER) "Client" else st.profile.secretaryName}: ${m.content.take(260)}"
@@ -847,7 +916,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                         )
                     },
                     onFailure = { err ->
-                        val fallback = ExecutiveAnalyticsEngine.buildDeterministicReply(trimmed, st.snapshot, st.profile)
+                        val fallback = ExecutiveAnalyticsEngine.buildDeterministicReply(trimmed, st.snapshot, st.profile, st.transactions)
                         ChatMessage(
                             id = "a_${UUID.randomUUID().toString().take(8)}",
                             role = ChatRole.ASSISTANT,
@@ -867,7 +936,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 if (_uiState.value.profile.voiceBriefingEnabled) speakText(assistantMsg.content)
             } else {
-                val replyText = ExecutiveAnalyticsEngine.buildDeterministicReply(trimmed, st.snapshot, st.profile)
+                val replyText = ExecutiveAnalyticsEngine.buildDeterministicReply(trimmed, st.snapshot, st.profile, st.transactions)
                 val assistantMsg = ChatMessage(
                     id = "a_${UUID.randomUUID().toString().take(8)}",
                     role = ChatRole.ASSISTANT,
