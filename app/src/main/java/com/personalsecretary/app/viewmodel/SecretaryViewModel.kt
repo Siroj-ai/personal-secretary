@@ -846,10 +846,11 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                     recentHistorySummary = "",
                     userPrompt = prompt,
                     onTokenChunk = { partial ->
-                        _uiState.update { it.copy(briefingText = partial) }
+                        _uiState.update { it.copy(briefingText = ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches(partial)) }
                     }
                 )
                 val finalBrief = res.getOrNull()?.text
+                    ?.let { ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches(it) }
                     ?: ExecutiveAnalyticsEngine.buildDeterministicBriefing(st.snapshot, st.profile)
                 database.saveLatestBriefing(finalBrief)
                 _uiState.update { it.copy(briefingText = finalBrief, isGeneratingBriefing = false) }
@@ -886,42 +887,58 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
 
             val st = _uiState.value
             if (st.engineState.isReady) {
+                val verifiedFacts = ExecutiveAnalyticsEngine.buildVerifiedFactsBlock(
+                    userQuery = trimmed,
+                    snapshot = st.snapshot,
+                    profile = st.profile,
+                    transactions = st.transactions
+                )
+                val verifiedHeader = "**Verified Figures**\n$verifiedFacts\n\n**${st.profile.secretaryName}'s Advice**\n"
+                _uiState.update { it.copy(streamingReply = verifiedHeader) }
+
                 val dossier = ExecutiveAnalyticsEngine.buildGemmaDossier(
                     snapshot = st.snapshot,
                     profile = st.profile,
                     recentTransactions = st.transactions,
                     userQuery = trimmed
                 )
-                val recentTurns = updatedHistory.dropLast(1).takeLast(4).joinToString("\n") { m ->
-                    "${if (m.role == ChatRole.USER) "Client" else st.profile.secretaryName}: ${m.content.take(260)}"
+                val recentTurns = updatedHistory.dropLast(1).takeLast(3).joinToString("\n") { m ->
+                    "${if (m.role == ChatRole.USER) "Client" else st.profile.secretaryName}: ${m.content.take(180)}"
+                }
+                val groundedPrompt = buildString {
+                    appendLine("Client question: $trimmed")
+                    appendLine()
+                    appendLine("Note: The exact VERIFIED FIGURES block below is ALREADY shown to the client right above your response. Do NOT repeat or re-list raw amounts/dates; provide ONLY 2–4 concise, sharp executive insights and concrete next actions:")
+                    appendLine(verifiedFacts.take(900))
                 }
                 val result = gemmaEngine.generateConsultation(
                     profile = st.profile,
                     dossierContext = dossier,
                     recentHistorySummary = recentTurns,
-                    userPrompt = trimmed,
+                    userPrompt = groundedPrompt,
                     onTokenChunk = { partial ->
-                        _uiState.update { it.copy(streamingReply = partial) }
+                        val cleaned = ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches(partial)
+                        _uiState.update { it.copy(streamingReply = verifiedHeader + cleaned) }
                     }
                 )
 
                 val assistantMsg = result.fold(
                     onSuccess = { out ->
+                        val cleanedAdvice = ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches(out.text).trim()
                         ChatMessage(
                             id = "a_${UUID.randomUUID().toString().take(8)}",
                             role = ChatRole.ASSISTANT,
-                            content = out.text,
-                            engineTag = out.engineTag,
+                            content = "$verifiedHeader$cleanedAdvice",
+                            engineTag = "${out.engineTag} · Verified",
                             tokensPerSec = out.tokensPerSec
                         )
                     },
                     onFailure = { err ->
-                        val fallback = ExecutiveAnalyticsEngine.buildDeterministicReply(trimmed, st.snapshot, st.profile, st.transactions)
                         ChatMessage(
                             id = "a_${UUID.randomUUID().toString().take(8)}",
                             role = ChatRole.ASSISTANT,
-                            content = "$fallback\n\n(Gemma runtime note: ${err.localizedMessage})",
-                            engineTag = "Deterministic Fallback"
+                            content = "$verifiedFacts\n\n(Gemma runtime note: ${err.localizedMessage})",
+                            engineTag = "Verified Deterministic"
                         )
                     }
                 )

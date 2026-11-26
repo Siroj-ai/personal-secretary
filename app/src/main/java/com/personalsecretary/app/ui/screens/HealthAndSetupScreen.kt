@@ -259,7 +259,7 @@ private fun SecretarySetupTabContent(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Use GPU Acceleration (Adreno 830)", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
-                        Text("Falls back to CPU automatically if GPU init fails", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                        Text("Fastest inference; toggle off for CPU if you prefer stricter free-form numeric accuracy", style = MaterialTheme.typography.bodySmall, color = TextMuted)
                     }
                     Switch(
                         checked = profile.preferGpuBackend,

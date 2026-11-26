@@ -255,5 +255,33 @@ class NepalMarketAndDailySpendTest {
         assertTrue(dailyReply.contains("Daily Expense Coach"))
         assertTrue(dailyReply.contains("2026-11-25"))
         assertTrue(dailyReply.contains("Suggestions:"))
+
+        val verified = ExecutiveAnalyticsEngine.buildVerifiedFactsBlock(
+            userQuery = "What was my spending yesterday?",
+            snapshot = snap,
+            profile = profile,
+            transactions = txns,
+            today = today
+        )
+        assertTrue(verified.contains("2026-11-25"))
+        assertTrue(verified.contains("600.00"))
+        assertTrue(verified.contains("Lunch"))
+
+        val generalVerified = ExecutiveAnalyticsEngine.buildVerifiedFactsBlock(
+            userQuery = "Give me a quick executive overview",
+            snapshot = snap,
+            profile = profile,
+            transactions = txns,
+            today = today
+        )
+        assertTrue(generalVerified.contains("79,220.00"))
+        assertTrue(generalVerified.contains("1,000.00/d"))
+
+        assertEquals(
+            "Yesterday 2026-11-25: Rs. 850.00, today Rs. 0.00, min Rs. 1,000.00, budget 445.2%",
+            ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches(
+                "Yesterday 2026-1111-25: Rs. 850.0.000, today Rs. 0.000.00, min Rs. 1,0000.00, budget 44445.2%"
+            )
+        )
     }
 }

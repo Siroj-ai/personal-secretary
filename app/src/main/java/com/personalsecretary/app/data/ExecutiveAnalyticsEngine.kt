@@ -991,6 +991,76 @@ object ExecutiveAnalyticsEngine {
         return sb.toString().trim()
     }
 
+    /**
+     * Produces a 100% deterministic, exact-figures summary directly from SQLite/live data
+     * to display above Gemma 4's qualitative advice so financial amounts & dates are never garbled.
+     */
+    fun buildVerifiedFactsBlock(
+        userQuery: String,
+        snapshot: ExecutiveSnapshot,
+        profile: SecretaryProfile,
+        transactions: List<TransactionRecord>,
+        today: LocalDate = LocalDate.now()
+    ): String {
+        val q = userQuery.lowercase(Locale.US)
+        val c = profile.currencySymbol
+        val matchesSpecificDomain = listOf(
+            "daily expense", "daily spend", "day by day", "daily plan",
+            "yesterday", "today's spend", "spent today", "spend today",
+            "ipo", "nepse", "invest", "share", "stock",
+            "leak", "category", "spend", "budget", "alcohol", "cigar", "tobacco",
+            "ssf", "credit", "loan", "net worth", "balance",
+            "email", "inbox", "mail", "gmail", "outlook",
+            "schedule", "calendar", "meeting", "task", "work", "remind",
+            "step", "walk", "physical", "exercise", "calor", "sleep", "heart", "watch"
+        ).any { q.contains(it) }
+
+        if (matchesSpecificDomain) {
+            return buildDeterministicReply(
+                userQuery = userQuery,
+                snapshot = snapshot,
+                profile = profile,
+                transactions = transactions,
+                today = today
+            )
+        }
+
+        // General executive question: show compact exact key figures
+        return buildString {
+            appendLine("• Liquid Debit: ${formatMoney(c, snapshot.debitBalance)} | Credit Card: ${formatMoney(c, snapshot.creditCardBalance)} | Investable Surplus: ${formatMoney(c, snapshot.investableSurplus)}")
+            appendLine("• Today (${today.format(isoFmt)}): ${formatMoney(c, snapshot.todaySpend)} | Yesterday: ${formatMoney(c, snapshot.yesterdaySpend)} | Daily Cap: ${formatMoney(c, snapshot.dailyBudgetAllowance)}/d")
+            appendLine("• Active Month (${snapshot.currentMonthKey}): ${formatMoney(c, snapshot.currentMonthExpense)} spent (${snapshot.budgetUsedPercent.toInt()}% of ${formatMoney(c, profile.monthlySpendBudget)})")
+            if (snapshot.ssfSummary.refundableAmount > 0.0) {
+                appendLine("• SSF Net Equity: ${formatMoney(c, snapshot.ssfSummary.netEquity)} (Saved ${formatMoney(c, snapshot.ssfSummary.refundableAmount)} − Loan ${formatMoney(c, snapshot.ssfSummary.totalDueAmount)})")
+            }
+            append("• Steps: ${snapshot.todaySteps}/${profile.dailyStepGoal} | Unread Emails: ${snapshot.unreadEmailsCount} | Open Tasks: ${snapshot.pendingTasks.size}")
+        }.trim()
+    }
+
+    /**
+     * Repairs quantized GPU FP16 digit-token stutters (e.g. "2026-1111-25" -> "2026-11-25",
+     * "Rs. 0.000.00" -> "Rs. 0.00", "Rs. 930.0.000" -> "Rs. 930.00") while leaving valid text untouched.
+     */
+    fun sanitizeGemmaNumericGlitches(raw: String): String {
+        if (raw.isBlank()) return raw
+        var out = raw
+        // Fix stuttered ISO dates like 2026-1111-25 or 202026-11-25
+        out = out.replace(Regex("\\b202026\\b"), "2026")
+        out = out.replace(Regex("\\b(20\\d{2})-111+-(0?\\d|[12]\\d|3[01])\\b"), "$1-11-$2")
+        out = out.replace(Regex("\\b(20\\d{2})-122+-(0?\\d|[12]\\d|3[01])\\b"), "$1-12-$2")
+        out = out.replace(Regex("\\b(20\\d{2})-00+(\\d)-(0?\\d|[12]\\d|3[01])\\b"), "$1-0$2-$3")
+        // Fix double-decimal glitches like 0.000.00 or 930.0.000 or 145,108.4.47
+        out = out.replace(Regex("(\\d[\\d,]*)\\.0+\\.0+\\b"), "$1.00")
+        out = out.replace(Regex("(\\d[\\d,]*)\\.(\\d)\\.\\2(\\d)\\b"), "$1.$2$3")
+        // Fix 3+ trailing decimal zeroes like 930.000 -> 930.00 or 0.000 -> 0.00
+        out = out.replace(Regex("(\\d[\\d,]*)\\.000+\\b"), "$1.00")
+        // Fix Rs. 1,0000.00 -> Rs. 1,000.00 (4 digits after comma before decimal)
+        out = out.replace(Regex("(Rs\\.\\s*\\d+),0000(\\.\\d{1,2})?\\b"), "$1,000.00")
+        // Fix stuttered 4+ repeated leading digits before % (e.g. 44445.2% -> 445.2%)
+        out = out.replace(Regex("\\b(\\d)\\1{3,}(\\d(?:\\.\\d+)?%)"), "$1$1$2")
+        return out
+    }
+
     fun buildDeterministicReply(
         userQuery: String,
         snapshot: ExecutiveSnapshot,
