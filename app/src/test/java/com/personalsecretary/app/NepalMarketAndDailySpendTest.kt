@@ -284,4 +284,47 @@ class NepalMarketAndDailySpendTest {
             )
         )
     }
+
+    @Test
+    fun deduplicatesEditedBankRowsByDateAmountBalanceAndPreservesTobaccoAlerts() {
+        val rawDebit = listOf(
+            listOf("Transaction Date", "Description", "Debit", "Credit", "Balance", "Category"),
+            // Edited human rows
+            listOf("11/25/2026", "Mobile Recharge", "100", "", "80900.00", "Utilities & Subscriptions"),
+            listOf("11/25/2026", "Sample Rum + Pilot Cigarrette", "720", "", "80180.00", "Personal & Lifestyle"),
+            // Re-appended raw bank duplicates at exact same (Date, Debit, Credit, Balance)
+            listOf("11/25/2026", "99887766", "100", "", "80900.00", ""),
+            listOf("11/25/2026", "mmm", "720", "", "80180.00", ""),
+            // Genuine second Rs. 100 spend on same day has DIFFERENT balance -> MUST NOT be dropped!
+            listOf("11/25/2026", "khaja", "100", "", "80080.00", "Other")
+        )
+
+        val bundle = DayBookParserAndHygiene.buildBundle(
+            rawDebitRows = rawDebit,
+            rawCreditRows = emptyList(),
+            rawSsfRows = emptyList(),
+            rawEarningsRows = emptyList(),
+            abbreviations = DayBookParserAndHygiene.defaultAbbreviations(),
+            syncedLabel = "Test"
+        )
+
+        // 5 raw rows -> 3 unique rows (2 edited duplicates removed, genuine 2nd Rs. 100 kept!)
+        assertEquals(3, bundle.transactions.size)
+        assertEquals(2, bundle.hygieneReport.duplicatesRemoved)
+        assertEquals(920.0, bundle.transactions.sumOf { it.debit }, 0.01)
+
+        // Kept richer human descriptions over numeric/truncated bank codes
+        assertTrue(bundle.transactions.any { it.description == "Mobile Recharge" })
+        assertTrue(bundle.transactions.any { it.description == "Sample Rum + Pilot Cigarrette" })
+        assertFalse(bundle.transactions.any { it.description == "99887766" })
+        assertFalse(bundle.transactions.any { it.description == "mmm" })
+
+        // Rum + Cigarette forced into Tobacco & Alcohol despite sheet 'Personal & Lifestyle'
+        val rumTx = bundle.transactions.first { it.description.contains("Rum") }
+        assertEquals("Tobacco & Alcohol", rumTx.category)
+
+        // 'Other' sheet category auto-upgraded to Food & Dining for 'khaja'
+        val khajaTx = bundle.transactions.first { it.description == "khaja" }
+        assertEquals("Food & Dining", khajaTx.category)
+    }
 }

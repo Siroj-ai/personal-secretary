@@ -138,6 +138,7 @@ object DayBookParserAndHygiene {
         var autoCategorizedCount = 0
 
         val seenKeys = LinkedHashMap<String, TransactionRecord>()
+        val seenRawScores = HashMap<String, Int>()
 
         for (i in startIndex until rows.size) {
             val row = rows[i]
@@ -156,28 +157,46 @@ object DayBookParserAndHygiene {
             rawValidCount++
 
             val dateIso = if (rawDate.isEmpty()) "0000-00-00" else parseToIsoDate(rawDate)
-            val dedupKey = "${accountType.name}|$dateIso|${desc.lowercase(Locale.US)}|${toCents(debit)}|${toCents(credit)}|${toCents(balance)}"
+            // Bank sync scripts frequently re-append raw bank descriptions after the user edits a row's
+            // description/category in Google Sheets. On a single Debit account, identical
+            // (date, debit, credit, resulting running balance) identifies the exact same ledger event.
+            val dedupKey = if (accountType == AccountType.DEBIT && dateIso != "0000-00-00") {
+                "${accountType.name}|$dateIso|${toCents(debit)}|${toCents(credit)}|${toCents(balance)}"
+            } else {
+                "${accountType.name}|$dateIso|${desc.lowercase(Locale.US)}|${toCents(debit)}|${toCents(credit)}|${toCents(balance)}"
+            }
+
+            val normalizedDesc = normalizeDescription(desc, abbreviations)
+            val inferred = inferCategory(normalizedDesc, debit, credit)
+            val isGenericSheetCat = sheetCat.isBlank() ||
+                sheetCat.equals("Other", ignoreCase = true) ||
+                sheetCat.equals("Uncategorized", ignoreCase = true)
+            val (resolvedCategory, wasAutoCat) = when {
+                inferred.equals("Tobacco & Alcohol", ignoreCase = true) -> "Tobacco & Alcohol" to true
+                !isGenericSheetCat -> sheetCat to false
+                else -> inferred to true
+            }
+            val score = rowRichnessScore(desc, sheetCat)
 
             val existing = seenKeys[dedupKey]
             if (existing != null) {
                 duplicatesRemoved++
-                if (existing.category.isBlank() && sheetCat.isNotBlank()) {
-                    seenKeys[dedupKey] = existing.copy(category = sheetCat, autoCategorized = false)
+                val prevScore = seenRawScores[dedupKey] ?: 0
+                if (score > prevScore) {
+                    seenKeys[dedupKey] = existing.copy(
+                        description = desc,
+                        normalizedDescription = normalizedDesc,
+                        category = resolvedCategory,
+                        autoCategorized = wasAutoCat
+                    )
+                    seenRawScores[dedupKey] = score
+                } else if ((existing.category.isBlank() || existing.category.equals("Uncategorized", ignoreCase = true)) && !isGenericSheetCat) {
+                    seenKeys[dedupKey] = existing.copy(category = resolvedCategory, autoCategorized = wasAutoCat)
                 }
                 continue
             }
 
-            val normalizedDesc = normalizeDescription(desc, abbreviations)
-            val resolvedCategory: String
-            val wasAutoCat: Boolean
-            if (sheetCat.isNotBlank()) {
-                resolvedCategory = sheetCat
-                wasAutoCat = false
-            } else {
-                resolvedCategory = inferCategory(normalizedDesc, debit, credit)
-                wasAutoCat = true
-                autoCategorizedCount++
-            }
+            if (wasAutoCat) autoCategorizedCount++
 
             seenKeys[dedupKey] = TransactionRecord(
                 id = "${accountType.name.lowercase(Locale.US)}_${seenKeys.size}_$dateIso",
@@ -192,6 +211,7 @@ object DayBookParserAndHygiene {
                 category = resolvedCategory,
                 autoCategorized = wasAutoCat
             )
+            seenRawScores[dedupKey] = score
         }
 
         // Preserve sheet order within identical dates, while ordering dates chronologically
@@ -266,14 +286,15 @@ object DayBookParserAndHygiene {
                 d.contains("khukuri") || d.contains("smoke") ||
                 d == "cg" || d == "cig" || d == "ciggy" || d == "pilot" -> "Tobacco & Alcohol"
             d.contains("nabil stock") || d.contains("dp-nabil") || d.contains("broker") ||
-                d.contains("meroshare") || d.contains("cdsc") || d.contains("nepse") ||
+                d.contains("meroshare") || d.contains("dmat") || d.contains("demat") ||
+                d.contains("cdsc") || d.contains("nepse") ||
                 d.contains("ipo") || d.contains("share") -> "Investments & Brokerage"
             d.contains("khaja") || d.contains("kha") || d.contains("chiya") || d.contains("tea") ||
                 d.contains("momo") || d.contains("coke") || d.contains("curd") || d.contains("dahi") ||
                 d.contains("milk") || d.contains("dudh") || d.contains("apple") || d.contains("kiwi") ||
-                d.contains("lays") || d.contains("biscuit") || d.contains("choco") || d.contains("cake") ||
+                d.contains("lays") || d.contains("kitkat") || d.contains("biscuit") || d.contains("choco") || d.contains("cake") ||
                 d.contains("cak") || d.contains("chowmein") || d.contains("samosa") || d.contains("paneer") ||
-                d.contains("vegetable") || d.contains("fruit") || d.contains("egg") -> "Food & Dining"
+                d.contains("khursani") || d.contains("vegetable") || d.contains("fruit") || d.contains("egg") -> "Food & Dining"
             d.contains("atm wdl") || d.contains("monthly household") || d.contains("house") ||
                 d.contains("hair") || d.contains("beauty") || d.contains("salon") || d.contains("sunglass") ||
                 d.contains("mop") || d.contains("cocopeat") ||
@@ -284,7 +305,7 @@ object DayBookParserAndHygiene {
                 d.contains("internet") || d.contains("electricity") || d.contains("water") -> "Utilities & Subscriptions"
             d.contains("trucare") || d.contains("usg") || d.contains("medical") ||
                 d.contains("pharmacy") || d.contains("lens") || d.contains("hospital") ||
-                d.contains("follow up") || d.contains("treatment") -> "Medical"
+                d.contains("breastpad") || d.contains("follow up") || d.contains("treatment") -> "Medical"
             d.contains("card payment") || d.contains("credit card") -> "Credit Card Payment"
             d.contains("ibft") || d.contains("accountft") || d.contains("transfer") -> "Transfers & Payments"
             d.contains("charge") || d.contains("fee") -> "Bank Charges"
@@ -452,6 +473,22 @@ object DayBookParserAndHygiene {
             .replace(" ", "")
         if (cleaned.startsWith("#")) return 0.0
         return cleaned.toDoubleOrNull() ?: 0.0
+    }
+
+    fun rowRichnessScore(description: String, sheetCategory: String): Int {
+        var score = 0
+        val cat = sheetCategory.trim()
+        if (cat.isNotEmpty() && !cat.equals("Other", ignoreCase = true) && !cat.equals("Uncategorized", ignoreCase = true)) {
+            score += 100
+        } else if (cat.isNotEmpty()) {
+            score += 20
+        }
+        val d = description.trim()
+        if (d.isNotEmpty() && !d.all { it.isDigit() }) {
+            score += 50
+        }
+        score += d.length.coerceAtMost(60)
+        return score
     }
 
     private fun toCents(value: Double): Long = (value * 100.0).roundToLong()

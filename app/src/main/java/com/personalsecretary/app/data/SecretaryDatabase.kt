@@ -253,43 +253,79 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
     }
 
     /**
-     * Re-applies upgraded categorization rules to existing 'Uncategorized' rows on app upgrades
-     * without ever overwriting user-edited or already-categorized transactions.
+     * Re-applies upgraded categorization and deduplication rules to existing rows on app upgrades
+     * without overwriting user-edited descriptions or custom non-generic categories.
      */
     suspend fun reclassifyUncategorizedTransactions(): Int = withContext(Dispatchers.IO) {
         val db = writableDatabase
         val updates = mutableListOf<Pair<String, String>>()
+        val toDelete = mutableListOf<String>()
+        val bestByDebitKey = HashMap<String, Triple<String, Int, String>>()
+
         db.rawQuery(
-            "SELECT id, description, normalized_description, debit, credit FROM transactions WHERE category = 'Uncategorized' OR category = ''",
+            "SELECT id, account_type, date_iso, description, normalized_description, debit, credit, balance, category, auto_categorized FROM transactions ORDER BY sort_order ASC",
             null
         ).use { c ->
             while (c.moveToNext()) {
                 val id = c.getString(0)
-                val desc = c.getString(1)
-                val norm = c.getString(2).ifBlank { desc }
-                val debit = c.getDouble(3)
-                val credit = c.getDouble(4)
+                val acct = c.getString(1)
+                val dateIso = c.getString(2)
+                val desc = c.getString(3)
+                val norm = c.getString(4).ifBlank { desc }
+                val debit = c.getDouble(5)
+                val credit = c.getDouble(6)
+                val balance = c.getDouble(7)
+                val cat = c.getString(8)
+
+                if (acct == AccountType.DEBIT.name && dateIso != "0000-00-00") {
+                    val key = "$dateIso|${Math.round(debit * 100.0)}|${Math.round(credit * 100.0)}|${Math.round(balance * 100.0)}"
+                    val score = DayBookParserAndHygiene.rowRichnessScore(norm, cat)
+                    val prev = bestByDebitKey[key]
+                    if (prev != null) {
+                        if (score > prev.second) {
+                            toDelete += prev.first
+                            bestByDebitKey[key] = Triple(id, score, cat)
+                        } else {
+                            toDelete += id
+                            continue
+                        }
+                    } else {
+                        bestByDebitKey[key] = Triple(id, score, cat)
+                    }
+                }
+
                 val inferred = DayBookParserAndHygiene.inferCategory(norm, debit, credit)
-                if (inferred != "Uncategorized") {
-                    updates += id to inferred
+                val isGeneric = cat.isBlank() ||
+                    cat.equals("Uncategorized", ignoreCase = true) ||
+                    cat.equals("Other", ignoreCase = true)
+                when {
+                    inferred.equals("Tobacco & Alcohol", ignoreCase = true) && !cat.equals("Tobacco & Alcohol", ignoreCase = true) ->
+                        updates += id to "Tobacco & Alcohol"
+                    isGeneric && inferred != cat ->
+                        updates += id to inferred
                 }
             }
         }
-        if (updates.isEmpty()) return@withContext 0
+        if (updates.isEmpty() && toDelete.isEmpty()) return@withContext 0
         db.beginTransaction()
         try {
+            toDelete.forEach { id ->
+                db.delete("transactions", "id = ?", arrayOf(id))
+            }
             updates.forEach { (id, category) ->
-                val cv = ContentValues().apply {
-                    put("category", category)
-                    put("auto_categorized", 1)
+                if (id !in toDelete) {
+                    val cv = ContentValues().apply {
+                        put("category", category)
+                        put("auto_categorized", 1)
+                    }
+                    db.update("transactions", cv, "id = ?", arrayOf(id))
                 }
-                db.update("transactions", cv, "id = ?", arrayOf(id))
             }
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
         }
-        updates.size
+        updates.size + toDelete.size
     }
 
     suspend fun loadTransactions(): List<TransactionRecord> = withContext(Dispatchers.IO) {
