@@ -7,9 +7,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,6 +20,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
@@ -30,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -40,7 +45,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.personalsecretary.app.data.ChatMessage
 import com.personalsecretary.app.data.ChatRole
@@ -95,7 +102,9 @@ fun AdvisorScreen(
         )
     }
 
-    LaunchedEffect(messages.size, streamingReply.length) {
+    val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+
+    LaunchedEffect(messages.size, streamingReply.length, isKeyboardOpen) {
         val total = messages.size + if (streamingReply.isNotEmpty()) 1 else 0
         if (total > 0) {
             listState.animateScrollToItem(total - 1)
@@ -145,7 +154,7 @@ fun AdvisorScreen(
             }
         }
 
-        if (profile.showVideoPresence && resolvedVideoPath != null) {
+        if (profile.showVideoPresence && resolvedVideoPath != null && !isKeyboardOpen) {
             Spacer(Modifier.height(8.dp))
             SecretaryPresenceBanner(
                 secretaryName = profile.secretaryName,
@@ -280,6 +289,13 @@ fun AdvisorScreen(
         Spacer(Modifier.height(8.dp))
 
         // Composer
+        val submitDraft = {
+            val text = draft.trim()
+            if (text.isNotEmpty() && !isGenerating) {
+                draft = ""
+                onSendMessage(text)
+            }
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -288,9 +304,21 @@ fun AdvisorScreen(
             OutlinedTextField(
                 value = draft,
                 onValueChange = { draft = it },
-                placeholder = { Text("Ask your secretary...") },
+                placeholder = { Text("Ask your secretary...", color = TextMuted) },
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = TextPrimary),
                 shape = RoundedCornerShape(16.dp),
                 maxLines = 4,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { submitDraft() }),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary,
+                    cursorColor = AccentGold,
+                    focusedBorderColor = AccentGold,
+                    unfocusedBorderColor = CardBorder,
+                    focusedContainerColor = CardSurfaceElevated,
+                    unfocusedContainerColor = CardSurface
+                ),
                 modifier = Modifier.weight(1f)
             )
             if (isGenerating) {
@@ -309,13 +337,7 @@ fun AdvisorScreen(
                 }
             } else {
                 Surface(
-                    onClick = {
-                        val text = draft.trim()
-                        if (text.isNotEmpty()) {
-                            draft = ""
-                            onSendMessage(text)
-                        }
-                    },
+                    onClick = submitDraft,
                     shape = RoundedCornerShape(14.dp),
                     color = AccentGold,
                     modifier = Modifier.size(48.dp)
