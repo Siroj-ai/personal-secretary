@@ -2,6 +2,7 @@ package com.personalsecretary.app
 
 import android.Manifest
 import android.content.ComponentCallbacks2
+import android.content.Intent
 import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.os.Bundle
@@ -28,6 +29,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +38,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.health.connect.client.PermissionController
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import com.personalsecretary.app.data.SecretaryVideoSlot
 import com.personalsecretary.app.mail.EmailNotificationAccessHelper
 import com.personalsecretary.app.ui.screens.AdvisorScreen
@@ -63,9 +68,12 @@ private enum class TopDestination(val label: String, val icon: ImageVector) {
 class MainActivity : ComponentActivity() {
 
     private val viewModel: SecretaryViewModel by viewModels()
+    private val _requestedTab = MutableStateFlow<String?>(null)
+    private val requestedTab: StateFlow<String?> = _requestedTab.asStateFlow()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleNotificationNavigationIntent(intent)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(AndroidColor.parseColor("#0B0F17"))
@@ -75,6 +83,8 @@ class MainActivity : ComponentActivity() {
             PersonalSecretaryTheme {
                 PersonalSecretaryAppRoot(
                     viewModel = viewModel,
+                    requestedTabFlow = requestedTab,
+                    onConsumeRequestedTab = { _requestedTab.value = null },
                     onOpenBatterySettings = {
                         runCatching { startActivity(viewModel.stepTracker.createAppSettingsIntent()) }
                     },
@@ -93,6 +103,27 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationNavigationIntent(intent)
+    }
+
+    private fun handleNotificationNavigationIntent(intent: Intent?) {
+        val target = intent?.getStringExtra(EXTRA_OPEN_TAB)?.trim()
+        if (!target.isNullOrEmpty()) {
+            _requestedTab.value = target
+        }
+    }
+
+    companion object {
+        const val EXTRA_OPEN_TAB = "extra_open_tab"
+        const val TAB_BRIEFING = "briefing"
+        const val TAB_SCHEDULE = "schedule"
+        const val TAB_FINANCES = "finances"
+        const val TAB_HEALTH = "health"
     }
 
     override fun onResume() {
@@ -116,6 +147,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun PersonalSecretaryAppRoot(
     viewModel: SecretaryViewModel,
+    requestedTabFlow: StateFlow<String?>,
+    onConsumeRequestedTab: () -> Unit,
     onOpenBatterySettings: () -> Unit,
     onOpenHealthConnectSettings: () -> Unit,
     onOpenNotificationAccessSettings: () -> Unit,
@@ -123,9 +156,24 @@ private fun PersonalSecretaryAppRoot(
     onOpenUnknownSourcesSettings: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val pendingTab by requestedTabFlow.collectAsState()
     var currentTab by remember { mutableStateOf(TopDestination.BRIEFING) }
     var healthSubTab by remember { mutableStateOf(HubSubTab.STEPS) }
     var pendingVideoSlot by remember { mutableStateOf<SecretaryVideoSlot?>(null) }
+
+    LaunchedEffect(pendingTab) {
+        when (pendingTab) {
+            MainActivity.TAB_BRIEFING -> currentTab = TopDestination.BRIEFING
+            MainActivity.TAB_SCHEDULE -> currentTab = TopDestination.SCHEDULE
+            MainActivity.TAB_FINANCES -> currentTab = TopDestination.FINANCES
+            MainActivity.TAB_HEALTH -> {
+                healthSubTab = HubSubTab.STEPS
+                currentTab = TopDestination.HEALTH_SETUP
+            }
+            else -> return@LaunchedEffect
+        }
+        onConsumeRequestedTab()
+    }
 
     val healthConnectLauncher = rememberLauncherForActivityResult(
         contract = PermissionController.createRequestPermissionResultContract()
