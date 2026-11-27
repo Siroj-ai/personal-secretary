@@ -660,6 +660,21 @@ private fun SecretarySetupTabContent(
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Auto-sync Google Sheets", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                        Text("Pulls new rows automatically on app open & hourly in background", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                    }
+                    Switch(
+                        checked = profile.autoSyncDayBook,
+                        onCheckedChange = { onSaveProfile(profile.copy(autoSyncDayBook = it)) }
+                    )
+                }
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(

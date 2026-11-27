@@ -209,10 +209,15 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
             putKvTx(db, KEY_EARNINGS, json.encodeToString(earnings))
             putKvTx(db, KEY_ABBREV, json.encodeToString(abbreviations))
             putKvTx(db, KEY_HYGIENE, json.encodeToString(hygiene))
+            putKvTx(db, KEY_LAST_DAYBOOK_SYNC_MS, System.currentTimeMillis().toString())
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
         }
+    }
+
+    suspend fun loadLastDayBookSyncMillis(): Long = withContext(Dispatchers.IO) {
+        getKv(KEY_LAST_DAYBOOK_SYNC_MS)?.toLongOrNull() ?: 0L
     }
 
     suspend fun appendSingleTransaction(tx: TransactionRecord) = withContext(Dispatchers.IO) {
@@ -653,5 +658,6 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
         private const val KEY_HOURLY_STEPS = "hourly_steps_v1"
         private const val KEY_HEALTH_VITALS = "health_vitals_v1"
         private const val KEY_MARKET_SNAPSHOT = "nepal_market_v1"
+        private const val KEY_LAST_DAYBOOK_SYNC_MS = "last_daybook_sync_ms_v1"
     }
 }

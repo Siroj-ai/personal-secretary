@@ -288,6 +288,7 @@ data class SecretaryProfile(
     val customDossierNotes: String = "",
     val spreadsheetId: String = "",
     val appsScriptUrl: String = "",
+    val autoSyncDayBook: Boolean = true,
     val modelPath: String = "",
     val preferGpuBackend: Boolean = true,
     val autoLoadModelOnStart: Boolean = true,

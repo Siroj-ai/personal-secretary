@@ -38,11 +38,18 @@ class DailyBriefingWorker(
         val db = SecretaryDatabase(applicationContext)
         val profile = db.loadProfile()
 
-        // 1. Refresh Health Connect steps + watch vitals silently if background permission was granted
+        // 1. Refresh Day Book from Google Sheets silently if auto-sync is enabled
+        DayBookAutoSyncWorker.syncDayBookIfConfigured(
+            db = db,
+            profile = profile,
+            minIntervalMs = 15L * 60L * 1000L
+        )
+
+        // 2. Refresh Health Connect steps + watch vitals silently if background permission was granted
         val tracker = OnePlusStepTracker(applicationContext, db, CoroutineScope(Dispatchers.IO))
         tracker.syncStepsFromHealthConnect(days = 7)
 
-        // 2. Refresh live Nepal IPOs & NEPSE secondary market snapshot from NepaliPaisa
+        // 3. Refresh live Nepal IPOs & NEPSE secondary market snapshot from NepaliPaisa
         val marketClient = NepalMarketClient()
         val marketSnap = marketClient.fetchMarketSnapshot().getOrNull()?.also {
             db.saveMarketSnapshot(it)

@@ -127,6 +127,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
     private var tasksCache = emptyList<SecretaryTask>()
     private var emailAlertsCache = emptyList<EmailAlertItem>()
     private var marketSnapshotCache = NepalMarketSnapshot()
+    private var lastDayBookSyncMillis: Long = 0L
 
     private var generationJob: Job? = null
 
@@ -195,6 +196,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
             tasksCache = database.loadTasks()
             emailAlertsCache = database.loadEmailAlerts(100)
             marketSnapshotCache = database.loadMarketSnapshot()
+            lastDayBookSyncMillis = database.loadLastDayBookSyncMillis()
             val calGranted = calendarReader.isCalendarPermissionGranted()
             val notifAccess = EmailNotificationAccessHelper.isNotificationAccessGranted(getApplication())
             calendarEventsCache = if (calGranted) calendarReader.loadUpcomingEvents(7) else emptyList()
@@ -253,6 +255,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
             if (!marketSnapshotCache.hasMarketData || marketStale) {
                 refreshNepalMarket(silent = true)
             }
+            maybeAutoSyncDayBook(minIntervalMs = 5L * 60L * 1000L)
         }
     }
 
@@ -280,6 +283,19 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
         refreshPermissionsAndSteps()
         refreshScheduleAndCalendar()
         refreshEmailInbox()
+        viewModelScope.launch {
+            val dbSyncTs = database.loadLastDayBookSyncMillis()
+            if (dbSyncTs > lastDayBookSyncMillis) {
+                lastDayBookSyncMillis = dbSyncTs
+                val txns = database.loadTransactions()
+                ssfCache = database.loadSsfSummary()
+                earningsCache = database.loadEarnings()
+                hygieneCache = database.loadHygieneReport()
+                _uiState.update { it.copy(transactions = txns) }
+                recomputeSnapshot()
+            }
+            maybeAutoSyncDayBook(minIntervalMs = 10L * 60L * 1000L)
+        }
     }
 
     fun onBackgroundPause() {
@@ -568,10 +584,27 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun syncDayBook() {
+    fun maybeAutoSyncDayBook(minIntervalMs: Long = 10L * 60L * 1000L) {
+        val profile = _uiState.value.profile
+        if (!profile.autoSyncDayBook) return
+        val hasRemote = profile.appsScriptUrl.startsWith("https://") || profile.spreadsheetId.isNotBlank()
+        if (!hasRemote) return
+        if (_uiState.value.isSyncingFinances) return
+        val elapsed = System.currentTimeMillis() - lastDayBookSyncMillis
+        if (elapsed < minIntervalMs) return
+        syncDayBook(silent = true)
+    }
+
+    fun syncDayBook(silent: Boolean = false) {
+        if (_uiState.value.isSyncingFinances) return
         val profile = _uiState.value.profile
         viewModelScope.launch {
-            _uiState.update { it.copy(isSyncingFinances = true, syncStatusMessage = "Syncing Day Book...") }
+            _uiState.update {
+                it.copy(
+                    isSyncingFinances = true,
+                    syncStatusMessage = if (silent) it.syncStatusMessage else "Syncing Day Book..."
+                )
+            }
             val result = when {
                 profile.appsScriptUrl.startsWith("https://") ->
                     syncClient.syncFromAppsScript(profile.appsScriptUrl)
@@ -588,15 +621,17 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                     abbreviations = bundle.abbreviations,
                     hygiene = bundle.hygieneReport
                 )
+                lastDayBookSyncMillis = System.currentTimeMillis()
                 ssfCache = bundle.ssfSummary
                 earningsCache = bundle.earnings
                 hygieneCache = bundle.hygieneReport
+                val label = if (silent) "Auto-synced" else "Synced"
                 _uiState.update {
                     it.copy(
                         transactions = bundle.transactions,
                         isSyncingFinances = false,
-                        syncStatusMessage = "Synced ${bundle.hygieneReport.uniqueDebitRows} unique rows (${bundle.hygieneReport.duplicatesRemoved} duplicates filtered).",
-                        statusToast = "Day Book synced cleanly."
+                        syncStatusMessage = "$label ${bundle.hygieneReport.uniqueDebitRows} unique rows (${bundle.hygieneReport.duplicatesRemoved} duplicates filtered).",
+                        statusToast = if (silent) it.statusToast else "Day Book synced cleanly."
                     )
                 }
                 recomputeSnapshot()
@@ -604,7 +639,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                 _uiState.update {
                     it.copy(
                         isSyncingFinances = false,
-                        syncStatusMessage = err.localizedMessage ?: "Day Book sync failed."
+                        syncStatusMessage = if (silent) it.syncStatusMessage else (err.localizedMessage ?: "Day Book sync failed.")
                     )
                 }
             }
