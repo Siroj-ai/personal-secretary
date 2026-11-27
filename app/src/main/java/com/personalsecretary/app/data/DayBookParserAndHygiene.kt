@@ -168,12 +168,15 @@ object DayBookParserAndHygiene {
 
             val normalizedDesc = normalizeDescription(desc, abbreviations)
             val inferred = inferCategory(normalizedDesc, debit, credit)
-            val isGenericSheetCat = sheetCat.isBlank() ||
-                sheetCat.equals("Other", ignoreCase = true) ||
-                sheetCat.equals("Uncategorized", ignoreCase = true)
             val (resolvedCategory, wasAutoCat) = when {
-                inferred.equals("Tobacco & Alcohol", ignoreCase = true) -> "Tobacco & Alcohol" to true
-                !isGenericSheetCat -> sheetCat to false
+                // Honor explicit Google Sheets Column F Category verbatim when populated
+                sheetCat.isNotBlank() && !sheetCat.equals("Uncategorized", ignoreCase = true) -> {
+                    if (sheetCat.equals("Other", ignoreCase = true) && inferred != "Other" && inferred != "Uncategorized") {
+                        inferred to true
+                    } else {
+                        sheetCat to false
+                    }
+                }
                 else -> inferred to true
             }
             val score = rowRichnessScore(desc, sheetCat)
@@ -190,7 +193,9 @@ object DayBookParserAndHygiene {
                         autoCategorized = wasAutoCat
                     )
                     seenRawScores[dedupKey] = score
-                } else if ((existing.category.isBlank() || existing.category.equals("Uncategorized", ignoreCase = true)) && !isGenericSheetCat) {
+                } else if ((existing.category.isBlank() || existing.category.equals("Uncategorized", ignoreCase = true) || existing.category.equals("Other", ignoreCase = true)) &&
+                    sheetCat.isNotBlank() && !sheetCat.equals("Other", ignoreCase = true) && !sheetCat.equals("Uncategorized", ignoreCase = true)
+                ) {
                     seenKeys[dedupKey] = existing.copy(category = resolvedCategory, autoCategorized = wasAutoCat)
                 }
                 continue
@@ -268,50 +273,85 @@ object DayBookParserAndHygiene {
         return trimmed.replace("Cigarrette", "Cigarette", ignoreCase = true)
     }
 
+    val SHEET_CATEGORIES = listOf(
+        "Food & Dining",
+        "Tobacco & Alcohol",
+        "Groceries",
+        "Personal & Lifestyle",
+        "Healthcare",
+        "Transportation",
+        "Utilities & Subscriptions",
+        "Home & Garden",
+        "Financial & Investments",
+        "Transfers",
+        "Salary & Income",
+        "Other"
+    )
+
     fun inferCategory(description: String, debit: Double, credit: Double): String {
         val d = description.lowercase(Locale.US)
         if (credit > 0.0 && debit == 0.0) {
             return when {
-                d.contains("salary") -> "Income"
-                d.contains("ibft") || d.contains("accountft") || d.contains("nimb") -> "Transfers & Payments"
-                else -> "Income"
+                d.contains("salary") || d.contains("ssf") -> "Salary & Income"
+                else -> "Transfers"
             }
         }
         return when {
-            d.contains("salary") -> "Income"
+            d.contains("salary") || d.contains("ssf") -> "Salary & Income"
             d.contains("cigar") || d.contains("churot") || d.contains("surya") || d.contains("shikhar") ||
                 d.contains("rum") || d.contains("beer") || d.contains("wine") || d.contains("whisky") ||
-                d.contains("whiskey") || d.contains("vodka") || d.contains("gin") || d.contains("raksi") ||
-                d.contains("tuborg") || d.contains("carlsberg") || d.contains("barahsinghe") ||
+                d.contains("whiskey") || d.contains("vodka") || d.contains("gin") || d.contains("soju") ||
+                d.contains("raksi") || d.contains("tuborg") || d.contains("carlsberg") || d.contains("barahsinghe") ||
                 d.contains("khukuri") || d.contains("mustang") || d.contains("ruslan") ||
                 d.contains("old durbar") || d.contains("8848") || d.contains("gorkha strong") ||
                 d.contains("tongba") || d.contains("chhyang") || d.contains("liquor") ||
                 d.contains("alcohol") || d.contains("smoke") ||
-                d == "cg" || d == "cig" || d == "ciggy" || d == "pilot" -> "Tobacco & Alcohol"
-            d.contains("nabil stock") || d.contains("dp-nabil") || d.contains("broker") ||
-                d.contains("meroshare") || d.contains("dmat") || d.contains("demat") ||
-                d.contains("cdsc") || d.contains("nepse") ||
-                d.contains("ipo") || d.contains("share") -> "Investments & Brokerage"
+                d == "cg" || d == "cig" || d == "ciggy" || d == "musta" || d == "pilot" -> "Tobacco & Alcohol"
+            d.contains("c-asba") || d.contains("nabil stock") || d.contains("dp-nabil") || d.contains("broker") ||
+                d.contains("meroshare") || d.contains("dmat") || d.contains("demat") || d.contains("cdsc") ||
+                d.contains("nepse") || d.contains("ipo") || d.contains("share") ||
+                d.contains("cc pmt") || d.contains("card_payment") || d.contains("card payment") ||
+                d.contains("atm wdl") || d.contains("atm withdrawal") || d.contains("gap loan") ||
+                d.contains("virtualcard") || d.contains("renewmbanking") || d.contains("mobile banking") -> "Financial & Investments"
+            d.contains("ibft") || d.contains("accountft") || d.contains("cipsuserft") ||
+                d.contains("esewa load") || d.contains("transfer") || d.contains("tour spending") -> "Transfers"
+            d.contains("trucare") || d.contains("usg") || d.contains("medical") || d.contains("medicine") ||
+                d.contains("medicare") || d.contains("dental") || d.contains("thermometer") ||
+                d.contains("enoxaparin") || d.contains("enoxparin") || d.contains("enax") ||
+                d.contains("pharmacy") || d.contains("optical") || d.contains("drishti") ||
+                d.contains("nespro") || d.contains("hospital") || d.contains("breastpad") ||
+                d.contains("follow up") || d.contains("treatment") || Regex("\\bmed\\b").containsMatchIn(d) -> "Healthcare"
+            d.contains("pathao") || d.contains("indrive") || d.contains("micro bus") || d.contains("taxi") ||
+                d.contains("bus") || d.contains("petrol") || d.contains("fuel") || d.contains("travel") -> "Transportation"
+            d.contains("recharge") || d.contains("voice + data") || d.contains("netflix") ||
+                d.contains("google one") || d.contains("esecure") || d.contains("internet") ||
+                d.contains("electricity") || d.contains("water") -> "Utilities & Subscriptions"
+            d.contains("house expenses") || d.contains("monthly household") || d.contains("green organic grass") ||
+                d.contains("cocopeat") || d.contains("vermicompost") || d.contains("gardening") ||
+                d.contains("blower") || d.contains("mop") || d.contains("dustbin") ||
+                d.contains("mosquito net") || d.contains("led bulb") || d.contains("fungicide") ||
+                d.contains("table") -> "Home & Garden"
+            d.contains("milk") || d.contains("dudh") || d.contains("egg") || d.contains("paneer") ||
+                d.contains("fish") || d.contains("sausage") || d.contains("vegetable") ||
+                d.contains("mustard") || d.contains("fruit") || d.contains("apple") || d.contains("kiwi") ||
+                d.contains("strawberry") || d.contains("pomegranate") || d.contains("aamala") ||
+                d.contains("curd") || d.contains("dahi") || d.contains("ghee") ||
+                d.contains("coriander") || d.contains("corainder") || d.contains("tomato") || d.contains("tomoato") ||
+                d.contains("chillies") || d.contains("khurs") || d.contains("kirana") -> "Groceries"
             d.contains("khaja") || d.contains("kha") || d.contains("chiya") || d.contains("tea") ||
-                d.contains("momo") || d.contains("coke") || d.contains("curd") || d.contains("dahi") ||
-                d.contains("milk") || d.contains("dudh") || d.contains("apple") || d.contains("kiwi") ||
-                d.contains("lays") || d.contains("kitkat") || d.contains("biscuit") || d.contains("choco") || d.contains("cake") ||
-                d.contains("cak") || d.contains("chowmein") || d.contains("samosa") || d.contains("paneer") ||
-                d.contains("khursani") || d.contains("vegetable") || d.contains("fruit") || d.contains("egg") -> "Food & Dining"
-            d.contains("atm wdl") || d.contains("monthly household") || d.contains("house") ||
-                d.contains("hair") || d.contains("beauty") || d.contains("salon") || d.contains("sunglass") ||
-                d.contains("mop") || d.contains("cocopeat") ||
-                d.contains("pant") || d.contains("slipper") -> "Household & Personal"
-            d.contains("pathao") || d.contains("indrive") || d.contains("taxi") ||
-                d.contains("bus") || d.contains("petrol") || d.contains("fuel") -> "Transport"
-            d.contains("recharge") || d.contains("netflix") || d.contains("google") ||
-                d.contains("internet") || d.contains("electricity") || d.contains("water") -> "Utilities & Subscriptions"
-            d.contains("trucare") || d.contains("usg") || d.contains("medical") ||
-                d.contains("pharmacy") || d.contains("lens") || d.contains("hospital") ||
-                d.contains("breastpad") || d.contains("follow up") || d.contains("treatment") -> "Medical"
-            d.contains("card payment") || d.contains("credit card") -> "Credit Card Payment"
-            d.contains("ibft") || d.contains("accountft") || d.contains("transfer") -> "Transfers & Payments"
-            d.contains("charge") || d.contains("fee") -> "Bank Charges"
+                d.contains("coffee") || d.contains("breakfast") || d.contains("samosa") || d.contains("chowmein") ||
+                d.contains("momo") || d.contains("burger") || d.contains("pizza") || d.contains("bakery") ||
+                d.contains("cake") || d.contains("cak") || d.contains("sweets") || d.contains("laddu") ||
+                d.contains("biscuit") || d.contains("lays") || d.contains("chips") || d.contains("choco") ||
+                d.contains("ice cream") || d.contains("juice") || d.contains("frooti") || d.contains("coke") ||
+                d.contains("katti roll") || d.contains("aloo chop") || d.contains("canteen") ||
+                d.contains("refreshment") || d.contains("kitkat") -> "Food & Dining"
+            d.contains("diamond") || d.contains("hair") || d.contains("shanti") || d.contains("beauty") ||
+                d.contains("salon") || d.contains("holder") || d.contains("dhago") || d.contains("pant") ||
+                d.contains("seed lens") || d.contains("sunglass") || d.contains("celebration") ||
+                d.contains("baby shower") || d.contains("wipes") || d.contains("powder") ||
+                d.contains("happydent") || d.contains("breas") || d.contains("socks") ||
+                d.contains("gloves") || d.contains("slipper") -> "Personal & Lifestyle"
             else -> "Uncategorized"
         }
     }

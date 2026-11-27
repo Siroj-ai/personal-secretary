@@ -393,6 +393,7 @@ data class ExecutiveSnapshot(
     val investableSurplus: Double = 0.0,
     val marketSnapshot: NepalMarketSnapshot = NepalMarketSnapshot(),
     val topCategories30d: List<CategorySpend> = emptyList(),
+    val allTimeCategories: List<CategorySpend> = emptyList(),
     val monthlyCashFlows: List<MonthlyCashFlow> = emptyList(),
     val hygieneReport: FinancialHygieneReport = FinancialHygieneReport(),
     val todaySteps: Long = 0L,

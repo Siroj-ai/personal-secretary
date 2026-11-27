@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import com.personalsecretary.app.data.AccountType
 import com.personalsecretary.app.data.DailyExpenseSummary
 import com.personalsecretary.app.data.DailySpendStatus
+import com.personalsecretary.app.data.DayBookParserAndHygiene
 import com.personalsecretary.app.data.ExecutiveAnalyticsEngine
 import com.personalsecretary.app.data.ExecutiveSnapshot
 import com.personalsecretary.app.data.NepalIpoItem
@@ -105,10 +106,29 @@ fun FinancesScreen(
     val cur = profile.currencySymbol
     var searchQuery by remember { mutableStateOf("") }
     var filterMode by remember { mutableStateOf("ALL") } // ALL, UNCAT, DEBIT, CREDIT, ANOMALY
+    var selectedCategory by remember { mutableStateOf<String?>(null) }
+    var showAllTimeCategories by remember { mutableStateOf(false) }
     var showAddDialog by remember { mutableStateOf(false) }
     var editingTx by remember { mutableStateOf<TransactionRecord?>(null) }
 
-    val filteredTxns = remember(transactions, searchQuery, filterMode) {
+    // Live Google Sheets categories sorted by usage frequency, merged with the 12 canonical sheet categories
+    val categoryCounts = remember(transactions) {
+        transactions
+            .filter { it.category.isNotBlank() }
+            .groupingBy { it.category }
+            .eachCount()
+    }
+    val sheetCategories = remember(categoryCounts) {
+        val fromSheet = categoryCounts.entries
+            .sortedByDescending { it.value }
+            .map { it.key }
+        val merged = LinkedHashSet<String>()
+        merged.addAll(fromSheet)
+        merged.addAll(DayBookParserAndHygiene.SHEET_CATEGORIES)
+        merged.filterNot { it.equals("Uncategorized", ignoreCase = true) }
+    }
+
+    val filteredTxns = remember(transactions, searchQuery, filterMode, selectedCategory) {
         transactions
             .withIndex()
             .sortedWith(
@@ -118,21 +138,23 @@ fun FinancesScreen(
             .map { it.value }
             .filter { tx ->
                 val matchesMode = when (filterMode) {
-                    "UNCAT" -> tx.category.equals("Uncategorized", ignoreCase = true)
+                    "UNCAT" -> tx.category.equals("Uncategorized", ignoreCase = true) ||
+                        tx.category.equals("Other", ignoreCase = true)
                     "DEBIT" -> tx.debit > 0.0
                     "CREDIT" -> tx.credit > 0.0
                     "ANOMALY" -> tx.isBalanceAnomaly
                     else -> true
                 }
+                val matchesCat = selectedCategory == null || tx.category.equals(selectedCategory, ignoreCase = true)
                 val q = searchQuery.trim()
                 val matchesSearch = q.isEmpty() ||
                     tx.normalizedDescription.contains(q, ignoreCase = true) ||
                     tx.description.contains(q, ignoreCase = true) ||
                     tx.category.contains(q, ignoreCase = true) ||
                     tx.dateIso.contains(q, ignoreCase = true)
-                matchesMode && matchesSearch
+                matchesMode && matchesCat && matchesSearch
             }
-            .take(120)
+            .take(150)
     }
 
     LazyColumn(
@@ -365,36 +387,93 @@ fun FinancesScreen(
             }
         }
 
-        // Top Spending Categories (30d)
-        if (snapshot.topCategories30d.isNotEmpty()) {
+        // Spend by Google Sheets Category (30-Day / All-Time toggle + tap to filter ledger)
+        val activeCategories = if (showAllTimeCategories) snapshot.allTimeCategories else snapshot.topCategories30d
+        if (activeCategories.isNotEmpty() || snapshot.allTimeCategories.isNotEmpty()) {
             item {
                 ExecutiveCard {
-                    SectionHeader(
-                        title = "30-Day Spend by Category",
-                        subtitle = "Burn rate ${ExecutiveAnalyticsEngine.formatMoney(cur, snapshot.dailyBurnRate30d)}/day"
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        snapshot.topCategories30d.forEach { cat ->
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                text = "Spend by Category",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = if (showAllTimeCategories) {
+                                    "All-time Google Sheets categories · Tap to filter"
+                                } else {
+                                    "30-day burn ${ExecutiveAnalyticsEngine.formatMoney(cur, snapshot.dailyBurnRate30d)}/day · Tap to filter"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextMuted
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            FilterChip(
+                                selected = !showAllTimeCategories,
+                                onClick = { showAllTimeCategories = false },
+                                label = { Text("30d", maxLines = 1, softWrap = false) }
+                            )
+                            FilterChip(
+                                selected = showAllTimeCategories,
+                                onClick = { showAllTimeCategories = true },
+                                label = { Text("All", maxLines = 1, softWrap = false) }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        activeCategories.forEach { cat ->
+                            val isSelected = selectedCategory.equals(cat.category, ignoreCase = true)
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isSelected) AccentGold.copy(alpha = 0.14f) else androidx.compose.ui.graphics.Color.Transparent,
+                                border = if (isSelected) BorderStroke(1.dp, AccentGold.copy(alpha = 0.5f)) else null,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        selectedCategory = if (isSelected) null else cat.category
+                                    }
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(horizontal = if (isSelected) 8.dp else 2.dp, vertical = 4.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    Text(cat.category, style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
-                                    Text(
-                                        "${ExecutiveAnalyticsEngine.formatMoney(cur, cat.amount)} (${cat.sharePercent}%)",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = AccentGold,
-                                        fontWeight = FontWeight.Medium
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "${cat.category} (${cat.count})",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = if (isSelected) AccentGold else TextPrimary,
+                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f).padding(end = 8.dp)
+                                        )
+                                        Text(
+                                            "${ExecutiveAnalyticsEngine.formatMoney(cur, cat.amount)} (${cat.sharePercent}%)",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (cat.category.contains("Tobacco", ignoreCase = true)) CoralAccent else AccentGold,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                    LinearProgressIndicator(
+                                        progress = { (cat.sharePercent / 100.0).toFloat().coerceIn(0f, 1f) },
+                                        modifier = Modifier.fillMaxWidth().height(6.dp),
+                                        color = if (cat.category.contains("Tobacco", ignoreCase = true)) CoralAccent else AccentGold,
+                                        trackColor = CardBorder
                                     )
                                 }
-                                LinearProgressIndicator(
-                                    progress = { (cat.sharePercent / 100.0).toFloat().coerceIn(0f, 1f) },
-                                    modifier = Modifier.fillMaxWidth().height(6.dp),
-                                    color = if (cat.category.contains("Tobacco", ignoreCase = true)) CoralAccent else AccentGold,
-                                    trackColor = CardBorder
-                                )
                             }
                         }
                     }
@@ -406,7 +485,10 @@ fun FinancesScreen(
         item {
             SectionHeader(
                 title = "Deduplicated Ledger",
-                subtitle = "Showing ${filteredTxns.size} of ${transactions.size} entries"
+                subtitle = buildString {
+                    append("Showing ${filteredTxns.size} of ${transactions.size} entries")
+                    if (!selectedCategory.isNullOrBlank()) append(" · Category: $selectedCategory")
+                }
             )
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
@@ -427,7 +509,7 @@ fun FinancesScreen(
             ) {
                 listOf(
                     "ALL" to "All",
-                    "UNCAT" to "Uncat.",
+                    "UNCAT" to "Other / Uncat.",
                     "DEBIT" to "Debits",
                     "CREDIT" to "Credits",
                     "ANOMALY" to "Gaps"
@@ -437,6 +519,37 @@ fun FinancesScreen(
                         onClick = { filterMode = key },
                         label = { Text(label, maxLines = 1, softWrap = false) }
                     )
+                }
+            }
+            if (sheetCategories.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilterChip(
+                        selected = selectedCategory == null,
+                        onClick = { selectedCategory = null },
+                        label = { Text("All Categories", maxLines = 1, softWrap = false) }
+                    )
+                    sheetCategories.forEach { cat ->
+                        val cnt = categoryCounts[cat] ?: 0
+                        FilterChip(
+                            selected = selectedCategory.equals(cat, ignoreCase = true),
+                            onClick = {
+                                selectedCategory = if (selectedCategory.equals(cat, ignoreCase = true)) null else cat
+                            },
+                            label = {
+                                Text(
+                                    text = if (cnt > 0) "$cat ($cnt)" else cat,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -469,6 +582,7 @@ fun FinancesScreen(
     if (showAddDialog) {
         AddTransactionDialog(
             hasAppsScript = profile.appsScriptUrl.startsWith("https://"),
+            availableCategories = sheetCategories,
             onDismiss = { showAddDialog = false },
             onSubmit = { desc, amt, isDebit, cat, pushRemote ->
                 showAddDialog = false
@@ -482,6 +596,7 @@ fun FinancesScreen(
             tx = target,
             currency = cur,
             hasAppsScript = profile.appsScriptUrl.startsWith("https://"),
+            availableCategories = sheetCategories,
             onDismiss = { editingTx = null },
             onSave = { newDesc, newCat ->
                 editingTx = null
@@ -935,25 +1050,15 @@ private fun ClarifyTransactionDialog(
     tx: TransactionRecord,
     currency: String,
     hasAppsScript: Boolean,
+    availableCategories: List<String>,
     onDismiss: () -> Unit,
     onSave: (description: String, category: String) -> Unit
 ) {
     var desc by remember(tx.id) { mutableStateOf(tx.normalizedDescription.ifBlank { tx.description }) }
     var category by remember(tx.id) { mutableStateOf(tx.category) }
-    val categories = listOf(
-        "Food & Dining",
-        "Personal & Lifestyle",
-        "Household & Personal",
-        "Tobacco & Alcohol",
-        "Alcohol",
-        "Groceries",
-        "Healthcare",
-        "Transport",
-        "Utilities & Subscriptions",
-        "Financial & Investments",
-        "Transfers",
-        "Income"
-    )
+    val categories = remember(availableCategories) {
+        availableCategories.ifEmpty { DayBookParserAndHygiene.SHEET_CATEGORIES }
+    }
     val amtLabel = if (tx.debit > 0.0) {
         "-${ExecutiveAnalyticsEngine.formatMoney(currency, tx.debit)}"
     } else {
@@ -980,7 +1085,7 @@ private fun ClarifyTransactionDialog(
                 OutlinedTextField(
                     value = category,
                     onValueChange = { category = it },
-                    label = { Text("Expense Type / Category") },
+                    label = { Text("Google Sheets Category") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -994,13 +1099,13 @@ private fun ClarifyTransactionDialog(
                         FilterChip(
                             selected = category.equals(cat, ignoreCase = true),
                             onClick = { category = cat },
-                            label = { Text(cat.substringBefore(" &").substringBefore(" "), maxLines = 1, softWrap = false) }
+                            label = { Text(cat, maxLines = 1, softWrap = false) }
                         )
                     }
                 }
                 if (hasAppsScript) {
                     Text(
-                        text = "Syncs description & expense type directly to Google Sheets.",
+                        text = "Syncs description & Category directly to Google Sheets.",
                         style = MaterialTheme.typography.labelSmall,
                         color = EmeraldAccent
                     )
@@ -1009,7 +1114,7 @@ private fun ClarifyTransactionDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onSave(desc.trim().ifBlank { tx.normalizedDescription }, category.trim().ifBlank { "Uncategorized" }) }
+                onClick = { onSave(desc.trim().ifBlank { tx.normalizedDescription }, category.trim().ifBlank { "Other" }) }
             ) { Text(if (hasAppsScript) "Save & Sync" else "Save") }
         },
         dismissButton = {
@@ -1021,6 +1126,7 @@ private fun ClarifyTransactionDialog(
 @Composable
 private fun AddTransactionDialog(
     hasAppsScript: Boolean,
+    availableCategories: List<String>,
     onDismiss: () -> Unit,
     onSubmit: (description: String, amount: Double, isDebit: Boolean, category: String, pushRemote: Boolean) -> Unit
 ) {
@@ -1030,10 +1136,9 @@ private fun AddTransactionDialog(
     var category by remember { mutableStateOf("Food & Dining") }
     var pushRemote by remember { mutableStateOf(hasAppsScript) }
 
-    val quickCategories = listOf(
-        "Food & Dining", "Household & Personal", "Transport",
-        "Medical", "Tobacco & Alcohol", "Utilities & Subscriptions", "Income"
-    )
+    val quickCategories = remember(availableCategories) {
+        availableCategories.ifEmpty { DayBookParserAndHygiene.SHEET_CATEGORIES }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1048,12 +1153,12 @@ private fun AddTransactionDialog(
                 ) {
                     FilterChip(
                         selected = isDebit,
-                        onClick = { isDebit = true },
+                        onClick = { isDebit = true; if (category == "Salary & Income") category = "Food & Dining" },
                         label = { Text("Expense (Debit)", maxLines = 1, softWrap = false) }
                     )
                     FilterChip(
                         selected = !isDebit,
-                        onClick = { isDebit = false; category = "Income" },
+                        onClick = { isDebit = false; category = "Salary & Income" },
                         label = { Text("Income (Credit)", maxLines = 1, softWrap = false) }
                     )
                 }
@@ -1074,7 +1179,7 @@ private fun AddTransactionDialog(
                 OutlinedTextField(
                     value = category,
                     onValueChange = { category = it },
-                    label = { Text("Category") },
+                    label = { Text("Google Sheets Category") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1086,9 +1191,9 @@ private fun AddTransactionDialog(
                 ) {
                     quickCategories.forEach { cat ->
                         FilterChip(
-                            selected = category == cat,
+                            selected = category.equals(cat, ignoreCase = true),
                             onClick = { category = cat },
-                            label = { Text(cat.substringBefore(" "), maxLines = 1, softWrap = false) }
+                            label = { Text(cat, maxLines = 1, softWrap = false) }
                         )
                     }
                 }

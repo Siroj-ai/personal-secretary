@@ -56,17 +56,36 @@ function doPost(e) {
     }
   }
 
-  sh.appendRow([
-    payload.date || "",
-    payload.description || "",
-    payload.debit != null ? payload.debit : "",
-    payload.credit != null ? payload.credit : "",
-    payload.balance != null ? payload.balance : "",
-    payload.category || ""
-  ]);
+  const usesSpillCat = hasSpillCategoryFormula(sh);
+  if (usesSpillCat) {
+    sh.appendRow([
+      payload.date || "",
+      payload.description || "",
+      payload.debit != null ? payload.debit : "",
+      payload.credit != null ? payload.credit : "",
+      payload.balance != null ? payload.balance : ""
+    ]);
+    if (payload.category) {
+      sh.getRange(sh.getLastRow(), 8).setValue(String(payload.category).trim());
+    }
+  } else {
+    sh.appendRow([
+      payload.date || "",
+      payload.description || "",
+      payload.debit != null ? payload.debit : "",
+      payload.credit != null ? payload.credit : "",
+      payload.balance != null ? payload.balance : "",
+      payload.category || ""
+    ]);
+  }
 
   return ContentService.createTextOutput(JSON.stringify({ ok: true, message: "Added", balance: payload.balance }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+function hasSpillCategoryFormula(sh) {
+  const f2 = String(sh.getRange(2, 6).getFormula() || "").trim();
+  return /^=\s*(MAP|ARRAYFORMULA)\b/i.test(f2);
 }
 
 function updateTransaction(payload) {
@@ -83,6 +102,7 @@ function updateTransaction(payload) {
   const newDesc = String(payload.newDescription || "").trim();
   const newCat = String(payload.newCategory || "").trim();
   const tz = Session.getScriptTimeZone();
+  const usesSpillCat = hasSpillCategoryFormula(sh);
 
   const numCols = Math.max(sh.getLastColumn(), 6);
   const values = sh.getRange(2, 1, lastRow - 1, numCols).getValues();
@@ -110,7 +130,7 @@ function updateTransaction(payload) {
     ) {
       const sheetRowNum = i + 2;
       if (newDesc) sh.getRange(sheetRowNum, 2).setValue(newDesc);
-      if (newCat) sh.getRange(sheetRowNum, 6).setValue(newCat);
+      if (newCat) sh.getRange(sheetRowNum, usesSpillCat ? 8 : 6).setValue(newCat);
       updatedCount++;
     }
   }

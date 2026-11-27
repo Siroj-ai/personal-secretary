@@ -124,12 +124,17 @@ class NepalMarketAndDailySpendTest {
     fun dossierIncludesYesterdaySpendEvenWithOldCreditCardTailAndTriggersSmartInsights() {
         val today = LocalDate.of(2026, 11, 26)
         assertEquals("Tobacco & Alcohol", DayBookParserAndHygiene.inferCategory("cigare", 55.0, 0.0))
-        assertEquals("Investments & Brokerage", DayBookParserAndHygiene.inferCategory("DP-NABIL STOCK DEALER", 200.0, 0.0))
+        assertEquals("Financial & Investments", DayBookParserAndHygiene.inferCategory("DP-NABIL STOCK DEALER", 200.0, 0.0))
+        assertEquals("Groceries", DayBookParserAndHygiene.inferCategory("Milk and Curd", 140.0, 0.0))
+        assertEquals("Home & Garden", DayBookParserAndHygiene.inferCategory("HOUSE EXPENSES", 10000.0, 0.0))
+        assertEquals("Transportation", DayBookParserAndHygiene.inferCategory("Pathao ride", 180.0, 0.0))
+        assertEquals("Healthcare", DayBookParserAndHygiene.inferCategory("Pharmacy medicine", 350.0, 0.0))
+        assertEquals("Salary & Income", DayBookParserAndHygiene.inferCategory("Monthly Salary", 0.0, 45000.0))
 
         // Debit transactions followed by old Credit Card rows at the tail
         val txns = listOf(
             TransactionRecord("d1", AccountType.DEBIT, "2026-11-24", "11/24/2026", "cigare", "cigare", 250.0, 0.0, 96200.0, "Tobacco & Alcohol"),
-            TransactionRecord("d2", AccountType.DEBIT, "2026-11-25", "11/25/2026", "DP-NABIL", "DP-NABIL STOCK DEALER", 200.0, 0.0, 96000.0, "Investments & Brokerage"),
+            TransactionRecord("d2", AccountType.DEBIT, "2026-11-25", "11/25/2026", "DP-NABIL", "DP-NABIL STOCK DEALER", 200.0, 0.0, 96000.0, "Financial & Investments"),
             TransactionRecord("d3", AccountType.DEBIT, "2026-11-25", "11/25/2026", "REF-990123", "REF-990123", 150.0, 0.0, 95850.0, "Uncategorized"),
             TransactionRecord("d4", AccountType.DEBIT, "2026-11-25", "11/25/2026", "City Salon", "City Salon", 500.0, 0.0, 95350.0, "Household & Personal"),
             // Old Credit Card rows at the tail
@@ -306,12 +311,12 @@ class NepalMarketAndDailySpendTest {
             listOf("Transaction Date", "Description", "Debit", "Credit", "Balance", "Category"),
             // Edited human rows
             listOf("11/25/2026", "Mobile Recharge", "100", "", "80900.00", "Utilities & Subscriptions"),
-            listOf("11/25/2026", "Sample Rum + Pilot Cigarrette", "720", "", "80180.00", "Personal & Lifestyle"),
+            listOf("11/25/2026", "Sample Rum + Pilot Cigarrette", "720", "", "80180.00", "Other"),
             // Re-appended raw bank duplicates at exact same (Date, Debit, Credit, Balance)
             listOf("11/25/2026", "99887766", "100", "", "80900.00", ""),
             listOf("11/25/2026", "mmm", "720", "", "80180.00", ""),
             // Genuine second Rs. 100 spend on same day has DIFFERENT balance -> MUST NOT be dropped!
-            listOf("11/25/2026", "khaja", "100", "", "80080.00", "Other")
+            listOf("11/25/2026", "khaja", "100", "", "80080.00", "Food & Dining")
         )
 
         val bundle = DayBookParserAndHygiene.buildBundle(
@@ -334,9 +339,11 @@ class NepalMarketAndDailySpendTest {
         assertFalse(bundle.transactions.any { it.description == "99887766" })
         assertFalse(bundle.transactions.any { it.description == "mmm" })
 
-        // Rum + Cigarette forced into Tobacco & Alcohol despite sheet 'Personal & Lifestyle'
+        // Rum + Cigarette refined from generic 'Other' into Tobacco & Alcohol, while explicit Google Sheets categories preserved
         val rumTx = bundle.transactions.first { it.description.contains("Rum") }
         assertEquals("Tobacco & Alcohol", rumTx.category)
+        val foodTx = bundle.transactions.first { it.description == "khaja" }
+        assertEquals("Food & Dining", foodTx.category)
 
         // 'Other' sheet category auto-upgraded to Food & Dining for 'khaja'
         val khajaTx = bundle.transactions.first { it.description == "khaja" }

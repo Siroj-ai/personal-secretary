@@ -137,9 +137,30 @@ object ExecutiveAnalyticsEngine {
         )
         val topCategories = catMap.entries
             .sortedByDescending { it.value.first }
-            .take(6)
             .map { (cat, pair) ->
                 val share = if (last30Expense > 0.0) (pair.first / last30Expense) * 100.0 else 0.0
+                CategorySpend(
+                    category = cat,
+                    amount = DayBookParserAndHygiene.round2(pair.first),
+                    count = pair.second,
+                    sharePercent = DayBookParserAndHygiene.round2(share)
+                )
+            }
+
+        // All-time debit category breakdown matching Google Sheets Category distribution
+        val allCatMap = LinkedHashMap<String, Pair<Double, Int>>()
+        var allTimeDebitTotal = 0.0
+        for (tx in debitTxns) {
+            if (tx.debit > 0.0) {
+                allTimeDebitTotal += tx.debit
+                val prev = allCatMap[tx.category] ?: (0.0 to 0)
+                allCatMap[tx.category] = (prev.first + tx.debit) to (prev.second + 1)
+            }
+        }
+        val allTimeCategories = allCatMap.entries
+            .sortedByDescending { it.value.first }
+            .map { (cat, pair) ->
+                val share = if (allTimeDebitTotal > 0.0) (pair.first / allTimeDebitTotal) * 100.0 else 0.0
                 CategorySpend(
                     category = cat,
                     amount = DayBookParserAndHygiene.round2(pair.first),
@@ -286,6 +307,7 @@ object ExecutiveAnalyticsEngine {
             investableSurplus = investableSurplus,
             marketSnapshot = marketSnapshot,
             topCategories30d = topCategories,
+            allTimeCategories = allTimeCategories,
             monthlyCashFlows = monthlyFlows,
             hygieneReport = hygiene,
             todaySteps = todayStepRec.steps,
