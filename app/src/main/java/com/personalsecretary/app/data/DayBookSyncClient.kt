@@ -5,6 +5,10 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -25,6 +29,18 @@ private data class AddTxRequestBody(
     val balance: Double,
     val category: String = "",
     val clientRequestId: String = ""
+)
+
+@Serializable
+private data class UpdateTxRequestBody(
+    val action: String = "update_transaction",
+    val sheetName: String,
+    val dateIso: String,
+    val debit: Double,
+    val credit: Double,
+    val balance: Double,
+    val newDescription: String,
+    val newCategory: String
 )
 
 class DayBookSyncClient {
@@ -123,6 +139,47 @@ class DayBookSyncClient {
                     throw IllegalStateException("Remote write failed (HTTP ${resp.code}). Saved locally instead.")
                 }
                 text
+            }
+        }
+    }
+
+    suspend fun postTransactionUpdateToAppsScript(
+        rawUrl: String,
+        sheetName: String,
+        dateIso: String,
+        debit: Double,
+        credit: Double,
+        balance: Double,
+        newDescription: String,
+        newCategory: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val trimmed = rawUrl.trim()
+            require(trimmed.startsWith("https://")) { "Configure an Apps Script Web App URL first." }
+            val payload = UpdateTxRequestBody(
+                sheetName = sheetName,
+                dateIso = dateIso,
+                debit = debit,
+                credit = credit,
+                balance = balance,
+                newDescription = newDescription,
+                newCategory = newCategory
+            )
+            val body = json.encodeToString(payload)
+                .toRequestBody("application/json; charset=utf-8".toMediaType())
+            val req = Request.Builder().url(trimmed).post(body).build()
+            client.newCall(req).execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful || text.trimStart().startsWith("<")) {
+                    throw IllegalStateException("Sheet sync failed (HTTP ${resp.code}).")
+                }
+                val parsed = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
+                val ok = (parsed?.get("ok") as? JsonPrimitive)?.booleanOrNull ?: true
+                if (!ok) {
+                    val err = (parsed["error"] as? JsonPrimitive)?.contentOrNull ?: "Sheet update rejected"
+                    throw IllegalStateException(err)
+                }
+                (parsed?.get("message") as? JsonPrimitive)?.contentOrNull ?: "Synced to Google Sheets"
             }
         }
     }

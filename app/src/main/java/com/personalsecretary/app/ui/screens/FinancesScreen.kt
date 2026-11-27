@@ -481,6 +481,7 @@ fun FinancesScreen(
         ClarifyTransactionDialog(
             tx = target,
             currency = cur,
+            hasAppsScript = profile.appsScriptUrl.startsWith("https://"),
             onDismiss = { editingTx = null },
             onSave = { newDesc, newCat ->
                 editingTx = null
@@ -933,6 +934,7 @@ private fun TransactionRowCard(
 private fun ClarifyTransactionDialog(
     tx: TransactionRecord,
     currency: String,
+    hasAppsScript: Boolean,
     onDismiss: () -> Unit,
     onSave: (description: String, category: String) -> Unit
 ) {
@@ -940,13 +942,16 @@ private fun ClarifyTransactionDialog(
     var category by remember(tx.id) { mutableStateOf(tx.category) }
     val categories = listOf(
         "Food & Dining",
+        "Personal & Lifestyle",
         "Household & Personal",
         "Tobacco & Alcohol",
-        "Investments & Brokerage",
+        "Alcohol",
+        "Groceries",
+        "Healthcare",
         "Transport",
-        "Medical",
         "Utilities & Subscriptions",
-        "Transfers & Payments",
+        "Financial & Investments",
+        "Transfers",
         "Income"
     )
     val amtLabel = if (tx.debit > 0.0) {
@@ -975,7 +980,7 @@ private fun ClarifyTransactionDialog(
                 OutlinedTextField(
                     value = category,
                     onValueChange = { category = it },
-                    label = { Text("Category") },
+                    label = { Text("Expense Type / Category") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -993,12 +998,19 @@ private fun ClarifyTransactionDialog(
                         )
                     }
                 }
+                if (hasAppsScript) {
+                    Text(
+                        text = "Syncs description & expense type directly to Google Sheets.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = EmeraldAccent
+                    )
+                }
             }
         },
         confirmButton = {
             Button(
                 onClick = { onSave(desc.trim().ifBlank { tx.normalizedDescription }, category.trim().ifBlank { "Uncategorized" }) }
-            ) { Text("Save") }
+            ) { Text(if (hasAppsScript) "Save & Sync" else "Save") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }

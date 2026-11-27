@@ -70,7 +70,7 @@ object ExecutiveAnalyticsEngine {
             val cat = tx.category.ifBlank { "Uncategorized" }
             val prev = catMap[cat] ?: (0.0 to 0)
             catMap[cat] = (prev.first + tx.debit) to (prev.second + 1)
-            if (cat.equals("Tobacco & Alcohol", ignoreCase = true)) {
+            if (isTobaccoOrAlcoholCategory(cat)) {
                 tobaccoAlcohol30d += tx.debit
             }
         }
@@ -84,7 +84,7 @@ object ExecutiveAnalyticsEngine {
         val tobaccoAlcohol7d = DayBookParserAndHygiene.round2(
             debitTxns.filter {
                 it.dateIso >= last7Start && it.dateIso != "0000-00-00" &&
-                    it.debit > 0.0 && it.category.equals("Tobacco & Alcohol", ignoreCase = true)
+                    it.debit > 0.0 && isTobaccoOrAlcoholCategory(it.category)
             }.sumOf { it.debit }
         )
         val recent14Start = today.minusDays(13).format(isoFmt)
@@ -339,7 +339,7 @@ object ExecutiveAnalyticsEngine {
                 ?.key
                 .orEmpty()
             val tobaccoSpend = DayBookParserAndHygiene.round2(
-                debitRows.filter { it.category.equals("Tobacco & Alcohol", ignoreCase = true) }.sumOf { it.debit }
+                debitRows.filter { isTobaccoOrAlcoholCategory(it.category) }.sumOf { it.debit }
             )
             val uncatCount = dayRows.count {
                 it.category.equals("Uncategorized", ignoreCase = true) && (it.debit > 0.0 || it.credit > 0.0)
@@ -1037,28 +1037,180 @@ object ExecutiveAnalyticsEngine {
         }.trim()
     }
 
+    private fun isTobaccoOrAlcoholCategory(category: String): Boolean =
+        category.contains("Tobacco", ignoreCase = true) || category.contains("Alcohol", ignoreCase = true)
+
     /**
-     * Repairs quantized GPU FP16 digit-token stutters (e.g. "2026-1111-25" -> "2026-11-25",
-     * "Rs. 0.000.00" -> "Rs. 0.00", "Rs. 930.0.000" -> "Rs. 930.00") while leaving valid text untouched.
+     * Repairs quantized GPU FP16 digit-token stutters (e.g. "Rs. 1,7300.00" -> "Rs. 1,730.00",
+     * "Rs.1,1666.7" -> "Rs. 1,166.67", "2026-1111-25" -> "2026-11-25", "Rs. 0.000.00" -> "Rs. 0.00")
+     * using both reference-grounded amount snapping and structural grammar fixes.
      */
-    fun sanitizeGemmaNumericGlitches(raw: String): String {
+    fun sanitizeGemmaNumericGlitches(raw: String, referenceText: String = ""): String {
         if (raw.isBlank()) return raw
         var out = raw
-        // Fix stuttered ISO dates like 2026-1111-25 or 202026-11-25
+
+        // 1. Fix stuttered ISO dates like 2026-1111-25 or 202026-11-25
         out = out.replace(Regex("\\b202026\\b"), "2026")
         out = out.replace(Regex("\\b(20\\d{2})-111+-(0?\\d|[12]\\d|3[01])\\b"), "$1-11-$2")
         out = out.replace(Regex("\\b(20\\d{2})-122+-(0?\\d|[12]\\d|3[01])\\b"), "$1-12-$2")
         out = out.replace(Regex("\\b(20\\d{2})-00+(\\d)-(0?\\d|[12]\\d|3[01])\\b"), "$1-0$2-$3")
-        // Fix double-decimal glitches like 0.000.00 or 930.0.000 or 145,108.4.47
+
+        // 2. Context-aware & structural fix for Rs. currency tokens
+        val amountRegex = Regex("Rs\\.\\s*([\\d,]+(?:\\.\\d+)*)")
+        val knownAmounts = if (referenceText.isNotBlank()) {
+            amountRegex.findAll(referenceText).map { it.groupValues[1] }.distinct().toList()
+        } else {
+            emptyList()
+        }
+        val knownBySig = knownAmounts.groupBy { digitSignature(it) }
+        val knownByIntSig = knownAmounts.groupBy { digitSignature(it.substringBefore(".")) }
+
+        out = amountRegex.replace(out) { m ->
+            val rawNum = m.groupValues[1]
+            // Already an exact verified amount from reference text
+            if (rawNum in knownAmounts) {
+                return@replace "Rs. $rawNum"
+            }
+
+            // Detect malformed FP16 GPU digit stutters:
+            // - 4+ digits after any comma (e.g. 1,7300.00 or 1,1666.7 or 1,0000.00)
+            // - 4+ digits before a comma (e.g. 1000,1839.898)
+            // - double decimal point (e.g. 930.0.000 or 0.000.00 or 145,108.4.47)
+            // - 1 or 3+ digits after decimal point (e.g. 1,166.7 or 930.000)
+            val isMalformed = rawNum.contains(Regex(",\\d{4,}")) ||
+                rawNum.contains(Regex("\\d{4,},")) ||
+                rawNum.count { it == '.' } > 1 ||
+                rawNum.contains(Regex("\\.\\d{3,}$")) ||
+                rawNum.contains(Regex("\\.\\d$"))
+
+            if (isMalformed) {
+                // (a) Try exact collapsed-digit signature match against verified reference amounts
+                val sig = digitSignature(rawNum)
+                val sigMatches = knownBySig[sig].orEmpty()
+                if (sigMatches.size == 1) {
+                    return@replace "Rs. ${sigMatches.first()}"
+                }
+                val intPart = rawNum.substringBefore(".")
+                val intMatches = knownByIntSig[digitSignature(intPart)].orEmpty()
+                if (intMatches.size == 1) {
+                    return@replace "Rs. ${intMatches.first()}"
+                }
+                // Try best close match in knownAmounts when comma-group is malformed
+                val bestKnown = findClosestReferenceAmount(rawNum, knownAmounts)
+                if (bestKnown != null) {
+                    return@replace "Rs. $bestKnown"
+                }
+                // (b) Structural fallback when reference doesn't contain this exact figure
+                return@replace "Rs. ${repairMalformedAmountStructurally(rawNum)}"
+            }
+            m.value
+        }
+
+        // 3. Generic double-decimal & 3-zero decimal cleanup outside Rs. tokens
         out = out.replace(Regex("(\\d[\\d,]*)\\.0+\\.0+\\b"), "$1.00")
         out = out.replace(Regex("(\\d[\\d,]*)\\.(\\d)\\.\\2(\\d)\\b"), "$1.$2$3")
-        // Fix 3+ trailing decimal zeroes like 930.000 -> 930.00 or 0.000 -> 0.00
         out = out.replace(Regex("(\\d[\\d,]*)\\.000+\\b"), "$1.00")
-        // Fix Rs. 1,0000.00 -> Rs. 1,000.00 (4 digits after comma before decimal)
-        out = out.replace(Regex("(Rs\\.\\s*\\d+),0000(\\.\\d{1,2})?\\b"), "$1,000.00")
         // Fix stuttered 4+ repeated leading digits before % (e.g. 44445.2% -> 445.2%)
         out = out.replace(Regex("\\b(\\d)\\1{3,}(\\d(?:\\.\\d+)?%)"), "$1$1$2")
         return out
+    }
+
+    private fun digitSignature(numStr: String): String {
+        val digits = numStr.filter { it.isDigit() }
+        if (digits.isEmpty()) return ""
+        val sb = StringBuilder()
+        var prev = '\u0000'
+        for (ch in digits) {
+            if (ch != prev) {
+                sb.append(ch)
+                prev = ch
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun findClosestReferenceAmount(malformed: String, knownAmounts: List<String>): String? {
+        if (knownAmounts.isEmpty()) return null
+        val badDigits = malformed.filter { it.isDigit() }
+        val badSig = digitSignature(malformed)
+        if (badDigits.isEmpty()) return null
+        val badLeadLen = malformed.substringBefore(",").substringBefore(".").length
+        var best: String? = null
+        var bestScore = Int.MAX_VALUE
+        for (cand in knownAmounts) {
+            val candSig = digitSignature(cand)
+            val candDigits = cand.filter { it.isDigit() }
+            if (candDigits.isEmpty() || candDigits.first() != badDigits.first()) continue
+            val sigLev = levenshteinSmall(badSig, candSig)
+            val lenDiff = abs(badDigits.length - candDigits.length)
+            val eligible = candSig == badSig ||
+                (candDigits.length >= 4 && isSubsequence(candSig, badSig) && (badSig.length - candSig.length) <= 2 && lenDiff <= 4) ||
+                (badDigits.length >= 4 && isSubsequence(badSig, candSig) && (candSig.length - badSig.length) <= 1 && lenDiff <= 2) ||
+                (sigLev <= 1 && lenDiff <= 2)
+            if (eligible) {
+                val candLeadLen = cand.substringBefore(",").substringBefore(".").length
+                val leadPenalty = if (malformed.contains(",") && cand.contains(",") && badLeadLen <= 3 && badLeadLen != candLeadLen) 2 else 0
+                val score = sigLev * 2 + lenDiff + leadPenalty
+                if (score < bestScore) {
+                    bestScore = score
+                    best = cand
+                }
+            }
+        }
+        return if (bestScore <= 8) best else null
+    }
+
+    private fun isSubsequence(short: String, long: String): Boolean {
+        var i = 0
+        for (ch in long) {
+            if (i < short.length && short[i] == ch) i++
+        }
+        return i == short.length
+    }
+
+    private fun levenshteinSmall(a: String, b: String): Int {
+        if (a == b) return 0
+        val dp = IntArray(b.length + 1) { it }
+        for (i in 1..a.length) {
+            var prev = dp[0]
+            dp[0] = i
+            for (j in 1..b.length) {
+                val temp = dp[j]
+                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
+                dp[j] = minOf(dp[j] + 1, dp[j - 1] + 1, prev + cost)
+                prev = temp
+            }
+        }
+        return dp[b.length]
+    }
+
+    private fun repairMalformedAmountStructurally(rawNum: String): String {
+        var s = rawNum
+        // Collapse double decimals like 930.0.000 -> 930.00 or 145,108.4.47 -> 145,108.47
+        s = s.replace(Regex("\\.0+\\.0+$"), ".00")
+        s = s.replace(Regex("\\.(\\d)\\.\\1(\\d)$"), ".$1$2")
+        // Collapse 3+ trailing zero decimals
+        s = s.replace(Regex("\\.000+$"), ".00")
+        // Fix 4-digit group after comma (e.g. 1,7300.00 -> 1,730.00, 1,1666.7 -> 1,166.67, 1,0000.00 -> 1,000.00)
+        s = Regex("(\\d+),(\\d{4})(\\.\\d+)?").replace(s) { m ->
+            val lead = m.groupValues[1]
+            val four = m.groupValues[2]
+            val dec = m.groupValues[3]
+            val fixedThree = Regex("(\\d)\\1").replaceFirst(four, "$1").take(3)
+            val fixedDec = when {
+                dec.isEmpty() -> ""
+                dec.length == 2 -> "${dec}0" // .7 -> .70 fallback
+                dec.length > 3 -> dec.take(3)
+                else -> dec
+            }
+            "$lead,$fixedThree$fixedDec"
+        }
+        // Fix 4-digit group before comma (e.g. 1000,183.98 -> 100,183.98)
+        s = Regex("\\b(\\d{4}),(\\d{3})").replace(s) { m ->
+            val fixedLead = Regex("(\\d)\\1").replaceFirst(m.groupValues[1], "$1")
+            "$fixedLead,${m.groupValues[2]}"
+        }
+        return s
     }
 
     fun buildDeterministicReply(

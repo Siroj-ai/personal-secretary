@@ -244,8 +244,10 @@ class SecretaryDatabase(context: Context) : SQLiteOpenHelper(
         newDescription: String,
         newCategory: String
     ) = withContext(Dispatchers.IO) {
+        val cleanDesc = newDescription.trim()
         val cv = ContentValues().apply {
-            put("normalized_description", newDescription.trim())
+            put("description", cleanDesc)
+            put("normalized_description", cleanDesc)
             put("category", newCategory.trim().ifBlank { "Uncategorized" })
             put("auto_categorized", 0)
         }

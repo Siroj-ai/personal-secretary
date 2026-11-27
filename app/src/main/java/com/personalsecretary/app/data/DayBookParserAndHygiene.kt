@@ -283,7 +283,10 @@ object DayBookParserAndHygiene {
                 d.contains("rum") || d.contains("beer") || d.contains("wine") || d.contains("whisky") ||
                 d.contains("whiskey") || d.contains("vodka") || d.contains("gin") || d.contains("raksi") ||
                 d.contains("tuborg") || d.contains("carlsberg") || d.contains("barahsinghe") ||
-                d.contains("khukuri") || d.contains("smoke") ||
+                d.contains("khukuri") || d.contains("mustang") || d.contains("ruslan") ||
+                d.contains("old durbar") || d.contains("8848") || d.contains("gorkha strong") ||
+                d.contains("tongba") || d.contains("chhyang") || d.contains("liquor") ||
+                d.contains("alcohol") || d.contains("smoke") ||
                 d == "cg" || d == "cig" || d == "ciggy" || d == "pilot" -> "Tobacco & Alcohol"
             d.contains("nabil stock") || d.contains("dp-nabil") || d.contains("broker") ||
                 d.contains("meroshare") || d.contains("dmat") || d.contains("demat") ||

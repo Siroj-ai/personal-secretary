@@ -283,6 +283,21 @@ class NepalMarketAndDailySpendTest {
                 "Yesterday 2026-1111-25: Rs. 850.0.000, today Rs. 0.000.00, min Rs. 1,0000.00, budget 44445.2%"
             )
         )
+
+        // Exact real-world GPU FP16 comma-group stutters (Rs. 1,7300.00 -> Rs. 1,730.00; Rs.1,1666.7 -> Rs. 1,166.67)
+        val refCorpus = "Yesterday: Rs. 1,730.00 | Daily Cap: Rs. 1,166.67 | Investable Surplus: Rs. 100,183.98"
+        assertEquals(
+            "Yesterday's Rs. 1,730.00 exceeded the Rs. 1,166.67 daily target with Rs. 100,183.98 surplus.",
+            ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches(
+                "Yesterday's Rs. 1,7300.00 exceeded the Rs.1,1666.7 daily target with Rs. 1000,1839.898 surplus.",
+                refCorpus
+            )
+        )
+        // Structural fallback even without reference corpus
+        assertEquals(
+            "Spend was Rs. 1,730.00.",
+            ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches("Spend was Rs. 1,7300.00.")
+        )
     }
 
     @Test

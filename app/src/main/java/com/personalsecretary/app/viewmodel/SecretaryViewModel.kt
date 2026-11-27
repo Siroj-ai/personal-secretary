@@ -518,15 +518,46 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun updateTransactionDetails(txId: String, newDescription: String, newCategory: String) {
         viewModelScope.launch {
-            database.updateTransactionDetails(txId, newDescription, newCategory)
+            val existing = _uiState.value.transactions.firstOrNull { it.id == txId }
+            val cleanDesc = newDescription.trim().ifBlank { existing?.normalizedDescription.orEmpty() }
+            val cleanCat = newCategory.trim().ifBlank { "Uncategorized" }
+
+            database.updateTransactionDetails(txId, cleanDesc, cleanCat)
             val updated = database.loadTransactions()
+            val scriptUrl = _uiState.value.profile.appsScriptUrl
+            val shouldSyncRemote = existing != null && scriptUrl.startsWith("https://")
             _uiState.update {
                 it.copy(
                     transactions = updated,
-                    statusToast = "Updated entry as '$newCategory'."
+                    statusToast = if (shouldSyncRemote) {
+                        "Saved '$cleanCat' locally — syncing to Google Sheets..."
+                    } else {
+                        "Updated entry as '$cleanCat'."
+                    }
                 )
             }
             recomputeSnapshot()
+
+            if (existing != null && scriptUrl.startsWith("https://")) {
+                val sheetName = if (existing.accountType == AccountType.CREDIT) "Credit Card" else "Debit Card"
+                val res = syncClient.postTransactionUpdateToAppsScript(
+                    rawUrl = scriptUrl,
+                    sheetName = sheetName,
+                    dateIso = existing.dateIso,
+                    debit = existing.debit,
+                    credit = existing.credit,
+                    balance = existing.balance,
+                    newDescription = cleanDesc,
+                    newCategory = cleanCat
+                )
+                res.onSuccess { msg ->
+                    _uiState.update { it.copy(statusToast = "$msg ('$cleanCat').") }
+                }.onFailure { err ->
+                    _uiState.update {
+                        it.copy(statusToast = "Saved locally; Sheet sync note: ${err.localizedMessage}")
+                    }
+                }
+            }
         }
     }
 
@@ -846,11 +877,11 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                     recentHistorySummary = "",
                     userPrompt = prompt,
                     onTokenChunk = { partial ->
-                        _uiState.update { it.copy(briefingText = ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches(partial)) }
+                        _uiState.update { it.copy(briefingText = ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches(partial, dossier)) }
                     }
                 )
                 val finalBrief = res.getOrNull()?.text
-                    ?.let { ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches(it) }
+                    ?.let { ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches(it, dossier) }
                     ?: ExecutiveAnalyticsEngine.buildDeterministicBriefing(st.snapshot, st.profile)
                 database.saveLatestBriefing(finalBrief)
                 _uiState.update { it.copy(briefingText = finalBrief, isGeneratingBriefing = false) }
@@ -905,10 +936,11 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                 val recentTurns = updatedHistory.dropLast(1).takeLast(3).joinToString("\n") { m ->
                     "${if (m.role == ChatRole.USER) "Client" else st.profile.secretaryName}: ${m.content.take(180)}"
                 }
+                val referenceCorpus = "$verifiedFacts\n$dossier"
                 val groundedPrompt = buildString {
                     appendLine("Client question: $trimmed")
                     appendLine()
-                    appendLine("Note: The exact VERIFIED FIGURES block below is ALREADY shown to the client right above your response. Do NOT repeat or re-list raw amounts/dates; provide ONLY 2–4 concise, sharp executive insights and concrete next actions:")
+                    appendLine("IMPORTANT: The exact VERIFIED FIGURES block below is ALREADY shown to the client right above your reply. Do NOT write Rs. amounts, percentages, or ISO dates in your reply — refer to them naturally and provide ONLY 2–4 crisp qualitative executive insights and concrete next actions:")
                     appendLine(verifiedFacts.take(900))
                 }
                 val result = gemmaEngine.generateConsultation(
@@ -917,14 +949,14 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
                     recentHistorySummary = recentTurns,
                     userPrompt = groundedPrompt,
                     onTokenChunk = { partial ->
-                        val cleaned = ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches(partial)
+                        val cleaned = ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches(partial, referenceCorpus)
                         _uiState.update { it.copy(streamingReply = verifiedHeader + cleaned) }
                     }
                 )
 
                 val assistantMsg = result.fold(
                     onSuccess = { out ->
-                        val cleanedAdvice = ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches(out.text).trim()
+                        val cleanedAdvice = ExecutiveAnalyticsEngine.sanitizeGemmaNumericGlitches(out.text, referenceCorpus).trim()
                         ChatMessage(
                             id = "a_${UUID.randomUUID().toString().take(8)}",
                             role = ChatRole.ASSISTANT,

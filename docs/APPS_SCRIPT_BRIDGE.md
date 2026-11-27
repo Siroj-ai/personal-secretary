@@ -27,6 +27,10 @@ function doGet(e) {
 
 function doPost(e) {
   const payload = JSON.parse(e.postData.contents || "{}");
+  if (payload.action === "update_transaction") {
+    return ContentService.createTextOutput(JSON.stringify(updateTransaction(payload)))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
   if (payload.action !== "add_transaction") {
     return ContentService.createTextOutput(JSON.stringify({ ok: false, error: "Unsupported action" }))
       .setMimeType(ContentService.MimeType.JSON);
@@ -63,5 +67,54 @@ function doPost(e) {
 
   return ContentService.createTextOutput(JSON.stringify({ ok: true, message: "Added", balance: payload.balance }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+function updateTransaction(payload) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(payload.sheetName || "Debit Card");
+  if (!sh) return { ok: false, error: "Sheet not found" };
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return { ok: false, error: "No rows to update" };
+
+  const targetDate = String(payload.dateIso || "").trim();
+  const targetDebit = Number(payload.debit || 0);
+  const targetCredit = Number(payload.credit || 0);
+  const targetBalance = Number(payload.balance || 0);
+  const newDesc = String(payload.newDescription || "").trim();
+  const newCat = String(payload.newCategory || "").trim();
+  const tz = Session.getScriptTimeZone();
+
+  const numCols = Math.max(sh.getLastColumn(), 6);
+  const values = sh.getRange(2, 1, lastRow - 1, numCols).getValues();
+  let updatedCount = 0;
+
+  for (let i = 0; i < values.length; i++) {
+    const row = values[i];
+    let rowDate = "";
+    if (row[0] instanceof Date) {
+      rowDate = Utilities.formatDate(row[0], tz, "yyyy-MM-dd");
+    } else {
+      const s = String(row[0] || "").trim();
+      const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      rowDate = m ? (m[3] + "-" + m[1].padStart(2, "0") + "-" + m[2].padStart(2, "0")) : s.slice(0, 10);
+    }
+    const rDeb = Number(String(row[2] || "0").replace(/,/g, "")) || 0;
+    const rCred = Number(String(row[3] || "0").replace(/,/g, "")) || 0;
+    const rBal = Number(String(row[4] || "0").replace(/,/g, "")) || 0;
+
+    if (
+      rowDate === targetDate &&
+      Math.abs(rDeb - targetDebit) < 0.01 &&
+      Math.abs(rCred - targetCredit) < 0.01 &&
+      Math.abs(rBal - targetBalance) < 0.01
+    ) {
+      const sheetRowNum = i + 2;
+      if (newDesc) sh.getRange(sheetRowNum, 2).setValue(newDesc);
+      if (newCat) sh.getRange(sheetRowNum, 6).setValue(newCat);
+      updatedCount++;
+    }
+  }
+  if (updatedCount === 0) return { ok: false, error: "Matching transaction row not found" };
+  return { ok: true, updatedRows: updatedCount, message: "Updated " + updatedCount + " row(s) in Google Sheets" };
 }
 ```
