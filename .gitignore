@@ -25,6 +25,9 @@ DayBook_Bootstrap.json
 *.litertlm
 *.task
 *.bin
+*.onnx
+*.tar.bz2
+app/libs/*.aar
 *.mp4
 *.mov
 

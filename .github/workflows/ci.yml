@@ -25,5 +25,20 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
+      - name: Cache & fetch sherpa-onnx AAR
+        uses: actions/cache@v4
+        id: sherpa-cache
+        with:
+          path: app/libs/sherpa-onnx-2.0.3.aar
+          key: sherpa-onnx-aar-2.0.3
+
+      - name: Download sherpa-onnx AAR if not cached
+        if: steps.sherpa-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p app/libs
+          curl -fL --retry 3 -o app/libs/sherpa-onnx-2.0.3.aar \
+            https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.3/sherpa-onnx-2.0.3.aar
+          echo "4c766e2e74c9d33d595338c21fe3b305c73ba45d47e96a235675c33142a2ec50  app/libs/sherpa-onnx-2.0.3.aar" | sha256sum -c -
+
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --no-daemon

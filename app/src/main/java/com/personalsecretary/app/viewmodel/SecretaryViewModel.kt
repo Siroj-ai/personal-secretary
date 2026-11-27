@@ -2,12 +2,13 @@ package com.personalsecretary.app.viewmodel
 
 import android.app.Application
 import android.net.Uri
-import android.speech.tts.TextToSpeech
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.personalsecretary.app.BuildConfig
 import com.personalsecretary.app.ai.GemmaAdvisorEngine
 import com.personalsecretary.app.ai.GemmaEngineState
+import com.personalsecretary.app.voice.ClaraVoiceEngine
+import com.personalsecretary.app.voice.VoiceEngineState
 import com.personalsecretary.app.data.AccountType
 import com.personalsecretary.app.data.CalendarEventItem
 import com.personalsecretary.app.data.ChatMessage
@@ -83,6 +84,7 @@ data class SecretaryUiState(
     val syncStatusMessage: String? = null,
     val stepPermissions: StepPermissionStatus = StepPermissionStatus(),
     val engineState: GemmaEngineState = GemmaEngineState(),
+    val voiceState: VoiceEngineState = VoiceEngineState(),
     val videoSlots: Map<String, String> = emptyMap(),
     val detectedModels: List<File> = emptyList(),
     val modelImportProgress: String? = null,
@@ -91,6 +93,7 @@ data class SecretaryUiState(
 ) {
     val activeVideoSlot: SecretaryVideoSlot
         get() = when {
+            voiceState.isSpeaking -> SecretaryVideoSlot.SPEAKING
             (isGeneratingChat && streamingReply.isEmpty()) || isGeneratingBriefing -> SecretaryVideoSlot.THINKING
             isGeneratingChat && streamingReply.isNotEmpty() -> SecretaryVideoSlot.SPEAKING
             (snapshot.overdueTasksCount > 0 || snapshot.urgentEmailsCount > 0) &&
@@ -99,7 +102,7 @@ data class SecretaryUiState(
         }
 }
 
-class SecretaryViewModel(application: Application) : AndroidViewModel(application), TextToSpeech.OnInitListener {
+class SecretaryViewModel(application: Application) : AndroidViewModel(application) {
 
     private val database = SecretaryDatabase(application)
     private val syncClient = DayBookSyncClient()
@@ -109,6 +112,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
     val stepTracker = OnePlusStepTracker(application, database, viewModelScope)
     val otaManager = OtaUpdateManager(application)
     private val gemmaEngine = GemmaAdvisorEngine(application)
+    private val voiceEngine = ClaraVoiceEngine(application, viewModelScope)
 
     private val _uiState = MutableStateFlow(SecretaryUiState())
     val uiState: StateFlow<SecretaryUiState> = _uiState.asStateFlow()
@@ -125,26 +129,21 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
     private var marketSnapshotCache = NepalMarketSnapshot()
 
     private var generationJob: Job? = null
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
 
     init {
-        tts = TextToSpeech(application, this)
         observeEngineAndSensors()
         loadInitialState()
-    }
-
-    override fun onInit(status: Int) {
-        if (status == TextToSpeech.SUCCESS) {
-            tts?.language = Locale.US
-            ttsReady = true
-        }
     }
 
     private fun observeEngineAndSensors() {
         viewModelScope.launch {
             gemmaEngine.state.collect { st ->
                 _uiState.update { it.copy(engineState = st) }
+            }
+        }
+        viewModelScope.launch {
+            voiceEngine.state.collect { vst ->
+                _uiState.update { it.copy(voiceState = vst) }
             }
         }
         viewModelScope.launch {
@@ -243,6 +242,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
             }
             recomputeSnapshot()
             refreshPermissionsAndSteps()
+            voiceEngine.preloadKokoroIfInstalled(resolvedProfile)
             if (resolvedProfile.autoLoadModelOnStart && resolvedProfile.modelPath.isNotBlank() && File(resolvedProfile.modelPath).exists()) {
                 loadGemmaModel()
             }
@@ -744,8 +744,40 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
     fun toggleVoiceBriefing() {
         val current = _uiState.value.profile
         val next = !current.voiceBriefingEnabled
-        if (!next) tts?.stop()
+        if (!next) voiceEngine.stop()
         updateProfile(current.copy(voiceBriefingEnabled = next))
+    }
+
+    fun speakMessage(text: String) {
+        voiceEngine.speak(text, _uiState.value.profile)
+    }
+
+    fun stopSpeaking() {
+        voiceEngine.stop()
+    }
+
+    fun testClaraVoice() {
+        voiceEngine.speakSample(_uiState.value.profile)
+    }
+
+    fun downloadKokoroVoiceModel() {
+        voiceEngine.downloadAndInstallKokoroModel { res ->
+            res.onSuccess { msg ->
+                _uiState.update { it.copy(statusToast = msg) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(statusToast = "Kokoro download failed: ${err.localizedMessage}") }
+            }
+        }
+    }
+
+    fun scanForKokoroVoiceModel() {
+        val found = voiceEngine.refreshKokoroModelPresence()
+        if (found != null) {
+            voiceEngine.preloadKokoroIfInstalled(_uiState.value.profile)
+            _uiState.update { it.copy(statusToast = "Kokoro-82M voice model found in ${found.name}!") }
+        } else {
+            _uiState.update { it.copy(statusToast = "Kokoro-82M not found yet. Tap 'Download Kokoro-82M' below.") }
+        }
     }
 
     fun scanDeviceForModels() {
@@ -1008,7 +1040,7 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
     fun stopGeneration() {
         generationJob?.cancel()
         generationJob = null
-        tts?.stop()
+        voiceEngine.stop()
         val partial = _uiState.value.streamingReply.trim()
         if (partial.isNotEmpty()) {
             viewModelScope.launch {
@@ -1162,21 +1194,13 @@ class SecretaryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun speakText(text: String) {
-        if (!ttsReady) return
-        val clean = text
-            .replace("•", ". ")
-            .replace("**", "")
-            .replace("*", "")
-            .replace("#", "")
-            .take(900)
-        tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "sec_brief")
+        voiceEngine.speak(text, _uiState.value.profile)
     }
 
     override fun onCleared() {
         super.onCleared()
         stepTracker.stopHardwareSensor()
-        tts?.stop()
-        tts?.shutdown()
+        voiceEngine.release()
         viewModelScope.launch { gemmaEngine.unload() }
     }
 }

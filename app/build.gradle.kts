@@ -18,7 +18,7 @@ fun parseSemverCode(version: String): Int {
 val resolvedVersionName: String = (
     providers.gradleProperty("RELEASE_VERSION_NAME").orNull
         ?: System.getenv("RELEASE_VERSION_NAME")
-        ?: "1.5.0"
+        ?: "1.6.0"
     ).trim().removePrefix("v").removePrefix("V")
 
 val resolvedVersionCode: Int = (
@@ -131,6 +131,8 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.litertlm.android)
+    implementation(libs.commons.compress)
+    implementation(files("libs/sherpa-onnx-2.0.3.aar"))
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

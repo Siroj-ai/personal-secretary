@@ -76,12 +76,15 @@ fun AdvisorScreen(
     isGenerating: Boolean,
     engineStatusLabel: String,
     isGemmaReady: Boolean,
+    isSpeakingVoice: Boolean,
     activeVideoSlot: SecretaryVideoSlot,
     videoSlots: Map<String, String>,
     onSendMessage: (String) -> Unit,
     onStopGeneration: () -> Unit,
     onClearChat: () -> Unit,
     onToggleVoiceBriefing: () -> Unit,
+    onSpeakMessage: (String) -> Unit,
+    onStopSpeaking: () -> Unit,
     onToggleVideoMute: () -> Unit,
     onOpenBrainSetup: () -> Unit
 ) {
@@ -161,6 +164,7 @@ fun AdvisorScreen(
                 activeSlot = activeVideoSlot,
                 videoPath = resolvedVideoPath,
                 statusBadge = when {
+                    isSpeakingVoice -> "Speaking Live"
                     isGenerating && streamingReply.isEmpty() -> "Reviewing Dossier..."
                     isGenerating -> "Briefing Live"
                     else -> engineStatusLabel
@@ -242,7 +246,12 @@ fun AdvisorScreen(
             }
 
             items(messages, key = { it.id }) { msg ->
-                ChatBubble(message = msg)
+                ChatBubble(
+                    message = msg,
+                    isSpeakingVoice = isSpeakingVoice,
+                    onSpeakMessage = onSpeakMessage,
+                    onStopSpeaking = onStopSpeaking
+                )
             }
 
             if (isGenerating) {
@@ -355,7 +364,12 @@ fun AdvisorScreen(
 }
 
 @Composable
-private fun ChatBubble(message: ChatMessage) {
+private fun ChatBubble(
+    message: ChatMessage,
+    isSpeakingVoice: Boolean,
+    onSpeakMessage: (String) -> Unit,
+    onStopSpeaking: () -> Unit
+) {
     val isUser = message.role == ChatRole.USER
     val bg = if (isUser) AccentGoldSoft else CardSurfaceElevated
     val border = if (isUser) AccentGold.copy(alpha = 0.55f) else CardBorder
@@ -400,12 +414,32 @@ private fun ChatBubble(message: ChatMessage) {
                     val speed = message.tokensPerSec?.let {
                         " · ${String.format(Locale.US, "%.1f", it)} tok/s"
                     }.orEmpty()
-                    Text(
-                        text = "${message.engineTag}$speed",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted,
-                        fontWeight = FontWeight.Medium
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "${message.engineTag}$speed",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(
+                            onClick = {
+                                if (isSpeakingVoice) onStopSpeaking() else onSpeakMessage(message.content)
+                            },
+                            modifier = Modifier.size(30.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isSpeakingVoice) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = if (isSpeakingVoice) "Stop speaking" else "Speak reply",
+                                tint = if (isSpeakingVoice) CoralAccent else AccentGold,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

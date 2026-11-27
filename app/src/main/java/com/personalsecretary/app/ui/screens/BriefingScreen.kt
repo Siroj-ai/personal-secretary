@@ -19,14 +19,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.EventNote
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Wallet
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -73,10 +76,13 @@ fun BriefingScreen(
     engineStatusLabel: String,
     briefingText: String,
     isGeneratingBriefing: Boolean,
+    isSpeakingVoice: Boolean,
     isSyncingAll: Boolean,
     availableOtaVersion: String?,
     onOpenOtaSetup: () -> Unit,
     onGenerateBriefing: () -> Unit,
+    onSpeakBriefing: (String) -> Unit,
+    onStopSpeaking: () -> Unit,
     onRefreshAll: () -> Unit,
     onToggleMute: () -> Unit,
     onOpenAdvisor: (String?) -> Unit,
@@ -179,7 +185,7 @@ fun BriefingScreen(
                     secretaryName = profile.secretaryName,
                     activeSlot = activeVideoSlot,
                     videoPath = resolvedVideoPath,
-                    statusBadge = engineStatusLabel,
+                    statusBadge = if (isSpeakingVoice) "Speaking Live" else engineStatusLabel,
                     isMuted = profile.videoMuted,
                     onToggleMute = onToggleMute,
                     height = 196.dp
@@ -382,39 +388,60 @@ fun BriefingScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
+                        modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = AccentGold, modifier = Modifier.size(18.dp))
                         Text(
-                            text = "${profile.secretaryName}'s Executive Briefing",
+                            text = "${profile.secretaryName}'s Briefing",
                             style = MaterialTheme.typography.titleMedium,
-                            color = AccentGold
+                            color = AccentGold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
-                    Button(
-                        onClick = onGenerateBriefing,
-                        enabled = !isGeneratingBriefing,
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentGold, contentColor = ObsidianBg),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        if (isGeneratingBriefing) {
-                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = ObsidianBg)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Briefing...")
-                        } else {
-                            Text("Generate")
+                    val resolvedBriefing = briefingText.ifBlank {
+                        ExecutiveAnalyticsEngine.buildDeterministicBriefing(snapshot, profile)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        IconButton(
+                            onClick = {
+                                if (isSpeakingVoice) onStopSpeaking() else onSpeakBriefing(resolvedBriefing)
+                            },
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isSpeakingVoice) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = if (isSpeakingVoice) "Stop speaking" else "Read briefing aloud",
+                                tint = if (isSpeakingVoice) CoralAccent else AccentGold,
+                                modifier = Modifier.size(19.dp)
+                            )
+                        }
+                        Button(
+                            onClick = onGenerateBriefing,
+                            enabled = !isGeneratingBriefing,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentGold, contentColor = ObsidianBg),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            if (isGeneratingBriefing) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = ObsidianBg)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Briefing...", maxLines = 1, softWrap = false)
+                            } else {
+                                Text("Generate", maxLines = 1, softWrap = false)
+                            }
                         }
                     }
                 }
                 Spacer(Modifier.height(10.dp))
-                val resolvedBriefing = briefingText.ifBlank {
+                val resolvedBriefingText = briefingText.ifBlank {
                     ExecutiveAnalyticsEngine.buildDeterministicBriefing(snapshot, profile)
                 }
-                val formattedBriefing = remember(resolvedBriefing) {
+                val formattedBriefing = remember(resolvedBriefingText) {
                     formatExecutiveMarkdown(
-                        raw = resolvedBriefing,
+                        raw = resolvedBriefingText,
                         boldColor = TextPrimary,
                         headingColor = AccentGold
                     )

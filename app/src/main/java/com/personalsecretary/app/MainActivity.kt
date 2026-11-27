@@ -255,6 +255,7 @@ private fun PersonalSecretaryAppRoot(
                     engineStatusLabel = uiState.engineState.activeBackendLabel,
                     briefingText = uiState.briefingText,
                     isGeneratingBriefing = uiState.isGeneratingBriefing,
+                    isSpeakingVoice = uiState.voiceState.isSpeaking,
                     isSyncingAll = uiState.isSyncingFinances,
                     availableOtaVersion = uiState.otaState.availableRelease?.versionName,
                     onOpenOtaSetup = {
@@ -262,6 +263,8 @@ private fun PersonalSecretaryAppRoot(
                         currentTab = TopDestination.HEALTH_SETUP
                     },
                     onGenerateBriefing = { viewModel.generateExecutiveBriefing() },
+                    onSpeakBriefing = { viewModel.speakMessage(it) },
+                    onStopSpeaking = { viewModel.stopSpeaking() },
                     onRefreshAll = { viewModel.syncAllSources() },
                     onToggleMute = { viewModel.toggleVideoMute() },
                     onOpenAdvisor = { preset ->
@@ -333,12 +336,15 @@ private fun PersonalSecretaryAppRoot(
                     isGenerating = uiState.isGeneratingChat,
                     engineStatusLabel = uiState.engineState.activeBackendLabel,
                     isGemmaReady = uiState.engineState.isReady,
+                    isSpeakingVoice = uiState.voiceState.isSpeaking,
                     activeVideoSlot = uiState.activeVideoSlot,
                     videoSlots = uiState.videoSlots,
                     onSendMessage = { viewModel.sendConsultationMessage(it) },
                     onStopGeneration = { viewModel.stopGeneration() },
                     onClearChat = { viewModel.clearChatHistory() },
                     onToggleVoiceBriefing = { viewModel.toggleVoiceBriefing() },
+                    onSpeakMessage = { viewModel.speakMessage(it) },
+                    onStopSpeaking = { viewModel.stopSpeaking() },
                     onToggleVideoMute = { viewModel.toggleVideoMute() },
                     onOpenBrainSetup = {
                         healthSubTab = HubSubTab.SETUP
@@ -393,6 +399,7 @@ private fun PersonalSecretaryAppRoot(
                     isModelLoading = uiState.engineState.isLoading,
                     isGemmaLoaded = uiState.engineState.isReady,
                     modelImportProgress = uiState.modelImportProgress,
+                    voiceState = uiState.voiceState,
                     otaState = uiState.otaState,
                     statusToast = uiState.statusToast,
                     onRequestHealthConnectPermissions = {
@@ -440,6 +447,10 @@ private fun PersonalSecretaryAppRoot(
                         videoPickerLauncher.launch(arrayOf("video/mp4", "video/*"))
                     },
                     onRemoveFlowVideo = { viewModel.removeGoogleFlowVideo(it) },
+                    onDownloadKokoroVoice = { viewModel.downloadKokoroVoiceModel() },
+                    onScanKokoroVoice = { viewModel.scanForKokoroVoiceModel() },
+                    onTestClaraVoice = { viewModel.testClaraVoice() },
+                    onStopSpeaking = { viewModel.stopSpeaking() },
                     onCheckForUpdate = { viewModel.checkForOtaUpdate(silent = false) },
                     onDownloadAndInstallUpdate = {
                         viewModel.downloadAndInstallOtaUpdate(
